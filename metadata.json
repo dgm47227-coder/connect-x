@@ -1,0 +1,6 @@
+{
+  "name": "ConnectX",
+  "description": "Social networking and real-time messaging platform with private chats, friend requests, stories, user discovery, and granular privacy controls.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

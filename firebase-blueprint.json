@@ -1,0 +1,853 @@
+{
+  "entities": {
+    "UserPublicProfile": {
+      "title": "UserPublicProfile",
+      "description": "Publicly discoverable user profile information without PII.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$",
+          "description": "Firebase Auth UID of the user."
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30,
+          "pattern": "^[a-z0-9_]+$",
+          "description": "Unique lowercase handle."
+        },
+        "displayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60,
+          "description": "Public display name."
+        },
+        "bio": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 250,
+          "description": "User biography."
+        },
+        "avatarUrl": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000,
+          "description": "Profile avatar URL or SVG data URI."
+        },
+        "friendsCount": {
+          "type": "integer",
+          "description": "Count of accepted friendships."
+        },
+        "privacyWhoCanRequest": {
+          "type": "string",
+          "enum": ["everyone", "none"],
+          "description": "Controls who can send friend requests."
+        },
+        "privacyStoryAudience": {
+          "type": "string",
+          "enum": ["friends", "public"],
+          "description": "Default story audience."
+        },
+        "privacyShowReadReceipts": {
+          "type": "boolean",
+          "description": "Whether read receipts are shared."
+        },
+        "privacyShowOnlineStatus": {
+          "type": "boolean",
+          "description": "Whether online presence is visible."
+        },
+        "isPublicProfile": {
+          "type": "boolean",
+          "description": "Whether profile can be listed in discovery queries."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server creation timestamp."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Server update timestamp."
+        }
+      },
+      "required": [
+        "uid",
+        "username",
+        "displayName",
+        "bio",
+        "avatarUrl",
+        "friendsCount",
+        "privacyWhoCanRequest",
+        "privacyStoryAudience",
+        "privacyShowReadReceipts",
+        "privacyShowOnlineStatus",
+        "isPublicProfile",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UserPrivateSettings": {
+      "title": "UserPrivateSettings",
+      "description": "Isolated PII and private notification preferences accessible only to the account owner.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "email": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 254
+        },
+        "notificationPreviewEnabled": {
+          "type": "boolean"
+        },
+        "notifyFriendRequests": {
+          "type": "boolean"
+        },
+        "notifyMessages": {
+          "type": "boolean"
+        },
+        "notifyStories": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "uid",
+        "email",
+        "notificationPreviewEnabled",
+        "notifyFriendRequests",
+        "notifyMessages",
+        "notifyStories",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "UsernameReservation": {
+      "title": "UsernameReservation",
+      "description": "Maps a unique username to an owner UID.",
+      "type": "object",
+      "properties": {
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30,
+          "pattern": "^[a-z0-9_]+$"
+        },
+        "uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["username", "uid", "createdAt"]
+    },
+    "FriendRequest": {
+      "title": "FriendRequest",
+      "description": "Directed friend request between two users.",
+      "type": "object",
+      "properties": {
+        "requestId": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fromUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "fromUsername": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30
+        },
+        "fromDisplayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "fromAvatarUrl": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000
+        },
+        "toUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "toUsername": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30
+        },
+        "toDisplayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "toAvatarUrl": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "accepted", "rejected", "cancelled"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "requestId",
+        "fromUid",
+        "fromUsername",
+        "fromDisplayName",
+        "fromAvatarUrl",
+        "toUid",
+        "toUsername",
+        "toDisplayName",
+        "toAvatarUrl",
+        "status",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "Friendship": {
+      "title": "Friendship",
+      "description": "Accepted mutual friendship record with deterministic ID.",
+      "type": "object",
+      "properties": {
+        "friendshipId": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "user1Uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "user2Uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "user1Username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30
+        },
+        "user2Username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30
+        },
+        "user1DisplayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "user2DisplayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "user1AvatarUrl": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000
+        },
+        "user2AvatarUrl": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000
+        },
+        "status": {
+          "type": "string",
+          "enum": ["active"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "friendshipId",
+        "user1Uid",
+        "user2Uid",
+        "user1Username",
+        "user2Username",
+        "user1DisplayName",
+        "user2DisplayName",
+        "user1AvatarUrl",
+        "user2AvatarUrl",
+        "status",
+        "createdAt"
+      ]
+    },
+    "ChatConversation": {
+      "title": "ChatConversation",
+      "description": "One-to-one private conversation metadata with deterministic ID.",
+      "type": "object",
+      "properties": {
+        "chatId": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "participant1Uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "participant2Uid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "participant1Name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "participant2Name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "participant1Username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30
+        },
+        "participant2Username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30
+        },
+        "participant1Avatar": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000
+        },
+        "participant2Avatar": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000
+        },
+        "lastMessageText": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 1000
+        },
+        "lastMessageSenderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128
+        },
+        "lastMessageStatus": {
+          "type": "string",
+          "enum": ["sent", "delivered", "read"]
+        },
+        "unreadCount1": {
+          "type": "integer"
+        },
+        "unreadCount2": {
+          "type": "integer"
+        },
+        "typingUid": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "chatId",
+        "participant1Uid",
+        "participant2Uid",
+        "participant1Name",
+        "participant2Name",
+        "participant1Username",
+        "participant2Username",
+        "participant1Avatar",
+        "participant2Avatar",
+        "lastMessageText",
+        "lastMessageSenderId",
+        "lastMessageStatus",
+        "unreadCount1",
+        "unreadCount2",
+        "typingUid",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "Individual message inside a private one-to-one conversation.",
+      "type": "object",
+      "properties": {
+        "messageId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "chatId": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "senderId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "recipientId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "text": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000
+        },
+        "mediaUrl": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 50000
+        },
+        "mediaType": {
+          "type": "string",
+          "enum": ["none", "image"]
+        },
+        "replyToMessageId": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 128
+        },
+        "replyToText": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 300
+        },
+        "status": {
+          "type": "string",
+          "enum": ["sent", "delivered", "read"]
+        },
+        "isDeleted": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "messageId",
+        "chatId",
+        "senderId",
+        "recipientId",
+        "text",
+        "mediaUrl",
+        "mediaType",
+        "replyToMessageId",
+        "replyToText",
+        "status",
+        "isDeleted",
+        "createdAt",
+        "updatedAt"
+      ]
+    },
+    "StoryItem": {
+      "title": "StoryItem",
+      "description": "Ephemeral 24-hour user story with server-validated expiration.",
+      "type": "object",
+      "properties": {
+        "storyId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "authorUsername": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30
+        },
+        "authorDisplayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "authorAvatarUrl": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 2000
+        },
+        "mediaType": {
+          "type": "string",
+          "enum": ["text", "image"]
+        },
+        "caption": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "mediaUrl": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 50000
+        },
+        "backgroundStyle": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 120
+        },
+        "audience": {
+          "type": "string",
+          "enum": ["public", "friends"]
+        },
+        "viewersCount": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "expiresAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "storyId",
+        "authorUid",
+        "authorUsername",
+        "authorDisplayName",
+        "authorAvatarUrl",
+        "mediaType",
+        "caption",
+        "mediaUrl",
+        "backgroundStyle",
+        "audience",
+        "viewersCount",
+        "createdAt",
+        "expiresAt"
+      ]
+    },
+    "StoryView": {
+      "title": "StoryView",
+      "description": "Individual viewer record in a story subcollection.",
+      "type": "object",
+      "properties": {
+        "viewerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "storyAuthorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "viewerUsername": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30
+        },
+        "viewerDisplayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "viewedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["viewerUid", "storyAuthorUid", "viewerUsername", "viewerDisplayName", "viewedAt"]
+    },
+    "UserBlock": {
+      "title": "UserBlock",
+      "description": "User block record preventing messages and requests.",
+      "type": "object",
+      "properties": {
+        "blockId": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "blockerUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "blockedUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "blockedUsername": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30
+        },
+        "blockedDisplayName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "reason": {
+          "type": "string",
+          "minLength": 0,
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "blockId",
+        "blockerUid",
+        "blockedUid",
+        "blockedUsername",
+        "blockedDisplayName",
+        "reason",
+        "createdAt"
+      ]
+    },
+    "AbuseReport": {
+      "title": "AbuseReport",
+      "description": "User safety report for abusive profiles, messages, or stories.",
+      "type": "object",
+      "properties": {
+        "reportId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "reporterUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "targetUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "targetType": {
+          "type": "string",
+          "enum": ["user", "message", "story"]
+        },
+        "reasonCategory": {
+          "type": "string",
+          "enum": ["spam", "harassment", "inappropriate", "impersonation", "other"]
+        },
+        "details": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 500
+        },
+        "status": {
+          "type": "string",
+          "enum": ["open", "reviewed", "resolved"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "reportId",
+        "reporterUid",
+        "targetUid",
+        "targetType",
+        "reasonCategory",
+        "details",
+        "status",
+        "createdAt"
+      ]
+    },
+    "UserNotification": {
+      "title": "UserNotification",
+      "description": "In-app notification record for a target user.",
+      "type": "object",
+      "properties": {
+        "notificationId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "recipientUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "actorUid": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 128,
+          "pattern": "^[a-zA-Z0-9_\\-]+$"
+        },
+        "actorName": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 60
+        },
+        "actorUsername": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 30
+        },
+        "type": {
+          "type": "string",
+          "enum": ["friend_request", "friend_accepted", "new_message", "story_view"]
+        },
+        "previewText": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "isRead": {
+          "type": "boolean"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "notificationId",
+        "recipientUid",
+        "actorUid",
+        "actorName",
+        "actorUsername",
+        "type",
+        "previewText",
+        "isRead",
+        "createdAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserPublicProfile" },
+      "description": "Publicly discoverable user profiles without PII."
+    },
+    "/users_private/{userId}": {
+      "schema": { "$ref": "#/entities/UserPrivateSettings" },
+      "description": "Owner-only PII and notification preferences."
+    },
+    "/usernames/{username}": {
+      "schema": { "$ref": "#/entities/UsernameReservation" },
+      "description": "Unique username reservation registry."
+    },
+    "/friendRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/FriendRequest" },
+      "description": "Pending and resolved friend requests."
+    },
+    "/friendships/{friendshipId}": {
+      "schema": { "$ref": "#/entities/Friendship" },
+      "description": "Mutual accepted friendships."
+    },
+    "/chats/{chatId}": {
+      "schema": { "$ref": "#/entities/ChatConversation" },
+      "description": "Private 1-to-1 chat conversation metadata."
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Messages belonging to a private conversation."
+    },
+    "/stories/{storyId}": {
+      "schema": { "$ref": "#/entities/StoryItem" },
+      "description": "Ephemeral 24-hour user stories."
+    },
+    "/stories/{storyId}/views/{viewerUid}": {
+      "schema": { "$ref": "#/entities/StoryView" },
+      "description": "Story viewer records."
+    },
+    "/blocks/{blockId}": {
+      "schema": { "$ref": "#/entities/UserBlock" },
+      "description": "Blocked user pairs."
+    },
+    "/reports/{reportId}": {
+      "schema": { "$ref": "#/entities/AbuseReport" },
+      "description": "Abuse and safety reports."
+    },
+    "/notifications/{notificationId}": {
+      "schema": { "$ref": "#/entities/UserNotification" },
+      "description": "User notification items."
+    }
+  }
+}
