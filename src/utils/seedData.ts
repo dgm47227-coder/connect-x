@@ -9,9 +9,11 @@ import {
   UserBlock,
   AbuseReport,
   UserNotification,
+  CallLogEntry,
 } from '../types/connectx';
 
 export function createAvatarSvg(initials: string, bgHex: string, accentHex: string): string {
+  const safeInitials = (initials || 'CX').slice(0, 2).toUpperCase();
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120" width="120" height="120">
     <defs>
       <linearGradient id="g" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -21,17 +23,20 @@ export function createAvatarSvg(initials: string, bgHex: string, accentHex: stri
     </defs>
     <rect width="120" height="120" rx="60" fill="url(#g)" />
     <circle cx="96" cy="24" r="32" fill="rgba(255,255,255,0.1)" />
-    <text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="#ffffff" font-family="Plus Jakarta Sans, sans-serif" font-weight="700" font-size="42" letter-spacing="-1">${initials}</text>
+    <text x="50%" y="54%" dominant-baseline="middle" text-anchor="middle" fill="#ffffff" font-family="Plus Jakarta Sans, sans-serif" font-weight="700" font-size="42" letter-spacing="-1">${safeInitials}</text>
   </svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
-export function createStoryVisualSvg(variant: 'aurora' | 'studio' | 'geometry' | 'sunset', _title?: string): string {
+export function createStoryVisualSvg(
+  variant: 'aurora' | 'studio' | 'geometry' | 'sunset',
+  _title?: string
+): string {
   const palettes = {
-    aurora: { c1: '#1e1b4b', c2: '#312e81', c3: '#4f46e5', accent: '#818cf8' },
-    studio: { c1: '#0f172a', c2: '#1e293b', c3: '#334155', accent: '#38bdf8' },
-    geometry: { c1: '#172554', c2: '#1d4ed8', c3: '#3b82f6', accent: '#93c5fd' },
-    sunset: { c1: '#2e1065', c2: '#4c1d95', c3: '#6d28d9', accent: '#c4b5fd' },
+    aurora: { c1: '#0b141a', c2: '#005c4b', c3: '#00a884', accent: '#34d399' },
+    studio: { c1: '#111b21', c2: '#202c33', c3: '#2a3942', accent: '#00a884' },
+    geometry: { c1: '#064e3b', c2: '#047857', c3: '#10b981', accent: '#6ee7b7' },
+    sunset: { c1: '#1e1b4b', c2: '#312e81', c3: '#4f46e5', accent: '#818cf8' },
   };
   const p = palettes[variant];
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 540 960" width="540" height="960">
@@ -45,531 +50,61 @@ export function createStoryVisualSvg(variant: 'aurora' | 'studio' | 'geometry' |
     <rect width="540" height="960" fill="url(#bg)" />
     <circle cx="420" cy="240" r="190" fill="${p.accent}" fill-opacity="0.18" />
     <circle cx="120" cy="680" r="240" fill="${p.accent}" fill-opacity="0.12" />
-    <path d="M0 580 Q270 460 540 600 L540 960 L0 960 Z" fill="rgba(15,23,42,0.5)" />
+    <path d="M0 580 Q270 460 540 600 L540 960 L0 960 Z" fill="rgba(11,20,26,0.55)" />
     <rect x="70" y="260" width="400" height="360" rx="32" fill="rgba(255,255,255,0.05)" stroke="rgba(255,255,255,0.14)" stroke-width="1.5" />
     <circle cx="270" cy="440" r="88" fill="${p.accent}" fill-opacity="0.22" />
   </svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
 }
 
-const now = Date.now();
-const hoursAgo = (h: number) => new Date(now - h * 3600_000).toISOString();
-const hoursFromNow = (h: number) => new Date(now + h * 3600_000).toISOString();
-const minutesAgo = (m: number) => new Date(now - m * 60_000).toISOString();
+const nowIso = new Date().toISOString();
 
+// Default session template before Firebase Auth / custom user onboarding completes.
+// All bot/AI personas and pre-populated fake chats have been removed so only real users appear.
 export const INITIAL_CURRENT_USER: UserPublicProfile = {
-  uid: 'user_alex_01',
-  username: 'alex_rivera',
-  displayName: 'Alex Rivera',
-  bio: 'Principal Systems Architect & Mobile UX Designer. Building distraction-free real-time tools.',
-  avatarUrl: createAvatarSvg('AR', '#2563eb', '#4f46e5'),
-  friendsCount: 3,
+  uid: 'connectx_member',
+  username: 'connectx_user',
+  displayName: 'ConnectX Member',
+  bio: 'Connected on ConnectX real-time messaging.',
+  avatarUrl: createAvatarSvg('CX', '#005c4b', '#00a884'),
+  friendsCount: 0,
   privacyWhoCanRequest: 'everyone',
   privacyStoryAudience: 'friends',
   privacyShowReadReceipts: true,
   privacyShowOnlineStatus: true,
   isPublicProfile: true,
   isOnline: true,
-  createdAt: hoursAgo(720),
-  updatedAt: hoursAgo(2),
+  createdAt: nowIso,
+  updatedAt: nowIso,
 };
 
 export const INITIAL_PRIVATE_SETTINGS: UserPrivateSettings = {
-  uid: 'user_alex_01',
-  email: 'alex.rivera@connectx.app',
+  uid: 'connectx_member',
+  email: 'member@connectx.app',
   notificationPreviewEnabled: true,
   notifyFriendRequests: true,
   notifyMessages: true,
   notifyStories: true,
-  createdAt: hoursAgo(720),
-  updatedAt: hoursAgo(2),
+  createdAt: nowIso,
+  updatedAt: nowIso,
 };
 
-export const INITIAL_DIRECTORY_USERS: UserPublicProfile[] = [
-  INITIAL_CURRENT_USER,
-  {
-    uid: 'user_elena_02',
-    username: 'elena_rostova',
-    displayName: 'Elena Rostova',
-    bio: 'Creative Director in Zurich. Minimalist architecture, spatial interfaces, and espresso.',
-    avatarUrl: createAvatarSvg('ER', '#4f46e5', '#7c3aed'),
-    friendsCount: 42,
-    privacyWhoCanRequest: 'everyone',
-    privacyStoryAudience: 'friends',
-    privacyShowReadReceipts: true,
-    privacyShowOnlineStatus: true,
-    isPublicProfile: true,
-    isOnline: true,
-    mutualFriendsCount: 4,
-    suggestionReason: 'Accepted friend · Active in Architecture & UX',
-    createdAt: hoursAgo(600),
-    updatedAt: minutesAgo(12),
-  },
-  {
-    uid: 'user_devon_03',
-    username: 'devon_brooks',
-    displayName: 'Devon Brooks',
-    bio: 'Security Engineer focusing on zero-trust Firestore rules, cryptography & mobile performance.',
-    avatarUrl: createAvatarSvg('DB', '#0284c7', '#2563eb'),
-    friendsCount: 29,
-    privacyWhoCanRequest: 'everyone',
-    privacyStoryAudience: 'public',
-    privacyShowReadReceipts: true,
-    privacyShowOnlineStatus: true,
-    isPublicProfile: true,
-    isOnline: true,
-    mutualFriendsCount: 3,
-    suggestionReason: 'Accepted friend · Security Engineering team',
-    createdAt: hoursAgo(500),
-    updatedAt: minutesAgo(45),
-  },
-  {
-    uid: 'user_sora_04',
-    username: 'sora_takahashi',
-    displayName: 'Sora Takahashi',
-    bio: 'Industrial designer & analog photographer in Tokyo. Documenting light and urban geometry.',
-    avatarUrl: createAvatarSvg('ST', '#4338ca', '#6366f1'),
-    friendsCount: 64,
-    privacyWhoCanRequest: 'everyone',
-    privacyStoryAudience: 'public',
-    privacyShowReadReceipts: true,
-    privacyShowOnlineStatus: false,
-    isPublicProfile: true,
-    isOnline: false,
-    mutualFriendsCount: 2,
-    suggestionReason: 'Accepted friend · Shared story activity',
-    createdAt: hoursAgo(450),
-    updatedAt: hoursAgo(3),
-  },
-  {
-    uid: 'user_marcus_05',
-    username: 'marcus_chen',
-    displayName: 'Marcus Chen',
-    bio: 'Android & Kotlin Multiplatform Lead. Material 3 motion systems and compose internals.',
-    avatarUrl: createAvatarSvg('MC', '#1d4ed8', '#4f46e5'),
-    friendsCount: 19,
-    privacyWhoCanRequest: 'everyone',
-    privacyStoryAudience: 'friends',
-    privacyShowReadReceipts: true,
-    privacyShowOnlineStatus: true,
-    isPublicProfile: true,
-    isOnline: true,
-    mutualFriendsCount: 2,
-    suggestionReason: '2 mutual friends including Elena Rostova',
-    createdAt: hoursAgo(300),
-    updatedAt: minutesAgo(25),
-  },
-  {
-    uid: 'user_nadia_06',
-    username: 'nadia_lin',
-    displayName: 'Nadia Lin',
-    bio: 'Product Researcher exploring human-centered social networks and calm notification design.',
-    avatarUrl: createAvatarSvg('NL', '#6d28d9', '#4f46e5'),
-    friendsCount: 37,
-    privacyWhoCanRequest: 'everyone',
-    privacyStoryAudience: 'public',
-    privacyShowReadReceipts: true,
-    privacyShowOnlineStatus: true,
-    isPublicProfile: true,
-    isOnline: true,
-    mutualFriendsCount: 3,
-    suggestionReason: '3 mutual friends including Devon Brooks',
-    createdAt: hoursAgo(240),
-    updatedAt: hoursAgo(1),
-  },
-  {
-    uid: 'user_liam_07',
-    username: 'liam_vance',
-    displayName: 'Liam Vance',
-    bio: 'Distributed systems & real-time messaging infrastructure. Building low-latency sync.',
-    avatarUrl: createAvatarSvg('LV', '#0369a1', '#1d4ed8'),
-    friendsCount: 15,
-    privacyWhoCanRequest: 'everyone',
-    privacyStoryAudience: 'public',
-    privacyShowReadReceipts: false,
-    privacyShowOnlineStatus: false,
-    isPublicProfile: true,
-    isOnline: false,
-    mutualFriendsCount: 1,
-    suggestionReason: '1 mutual friend (Sora Takahashi)',
-    createdAt: hoursAgo(180),
-    updatedAt: hoursAgo(5),
-  },
-];
+export const INITIAL_DIRECTORY_USERS: UserPublicProfile[] = [];
 
-export const INITIAL_FRIENDSHIPS: Friendship[] = [
-  {
-    friendshipId: 'user_alex_01_user_elena_02',
-    user1Uid: 'user_alex_01',
-    user2Uid: 'user_elena_02',
-    user1Username: 'alex_rivera',
-    user2Username: 'elena_rostova',
-    user1DisplayName: 'Alex Rivera',
-    user2DisplayName: 'Elena Rostova',
-    user1AvatarUrl: INITIAL_CURRENT_USER.avatarUrl,
-    user2AvatarUrl: INITIAL_DIRECTORY_USERS[1].avatarUrl,
-    status: 'active',
-    createdAt: hoursAgo(400),
-  },
-  {
-    friendshipId: 'user_alex_01_user_devon_03',
-    user1Uid: 'user_alex_01',
-    user2Uid: 'user_devon_03',
-    user1Username: 'alex_rivera',
-    user2Username: 'devon_brooks',
-    user1DisplayName: 'Alex Rivera',
-    user2DisplayName: 'Devon Brooks',
-    user1AvatarUrl: INITIAL_CURRENT_USER.avatarUrl,
-    user2AvatarUrl: INITIAL_DIRECTORY_USERS[2].avatarUrl,
-    status: 'active',
-    createdAt: hoursAgo(320),
-  },
-  {
-    friendshipId: 'user_alex_01_user_sora_04',
-    user1Uid: 'user_alex_01',
-    user2Uid: 'user_sora_04',
-    user1Username: 'alex_rivera',
-    user2Username: 'sora_takahashi',
-    user1DisplayName: 'Alex Rivera',
-    user2DisplayName: 'Sora Takahashi',
-    user1AvatarUrl: INITIAL_CURRENT_USER.avatarUrl,
-    user2AvatarUrl: INITIAL_DIRECTORY_USERS[3].avatarUrl,
-    status: 'active',
-    createdAt: hoursAgo(210),
-  },
-];
+export const INITIAL_FRIENDSHIPS: Friendship[] = [];
 
-export const INITIAL_FRIEND_REQUESTS: FriendRequest[] = [
-  {
-    requestId: 'user_marcus_05_user_alex_01',
-    fromUid: 'user_marcus_05',
-    fromUsername: 'marcus_chen',
-    fromDisplayName: 'Marcus Chen',
-    fromAvatarUrl: INITIAL_DIRECTORY_USERS[4].avatarUrl,
-    toUid: 'user_alex_01',
-    toUsername: 'alex_rivera',
-    toDisplayName: 'Alex Rivera',
-    toAvatarUrl: INITIAL_CURRENT_USER.avatarUrl,
-    status: 'pending',
-    createdAt: minutesAgo(38),
-    updatedAt: minutesAgo(38),
-  },
-  {
-    requestId: 'user_alex_01_user_liam_07',
-    fromUid: 'user_alex_01',
-    fromUsername: 'alex_rivera',
-    fromDisplayName: 'Alex Rivera',
-    fromAvatarUrl: INITIAL_CURRENT_USER.avatarUrl,
-    toUid: 'user_liam_07',
-    toUsername: 'liam_vance',
-    toDisplayName: 'Liam Vance',
-    toAvatarUrl: INITIAL_DIRECTORY_USERS[6].avatarUrl,
-    status: 'pending',
-    createdAt: hoursAgo(4),
-    updatedAt: hoursAgo(4),
-  },
-];
+export const INITIAL_FRIEND_REQUESTS: FriendRequest[] = [];
 
-export const INITIAL_CHATS: ChatConversation[] = [
-  {
-    chatId: 'user_alex_01_user_elena_02',
-    participant1Uid: 'user_alex_01',
-    participant2Uid: 'user_elena_02',
-    participant1Name: 'Alex Rivera',
-    participant2Name: 'Elena Rostova',
-    participant1Username: 'alex_rivera',
-    participant2Username: 'elena_rostova',
-    participant1Avatar: INITIAL_CURRENT_USER.avatarUrl,
-    participant2Avatar: INITIAL_DIRECTORY_USERS[1].avatarUrl,
-    lastMessageText: 'I uploaded the updated navigation tokens and dark theme contrast specs.',
-    lastMessageSenderId: 'user_elena_02',
-    lastMessageStatus: 'delivered',
-    unreadCount1: 1,
-    unreadCount2: 0,
-    typingUid: '',
-    createdAt: hoursAgo(120),
-    updatedAt: minutesAgo(8),
-  },
-  {
-    chatId: 'user_alex_01_user_devon_03',
-    participant1Uid: 'user_alex_01',
-    participant2Uid: 'user_devon_03',
-    participant1Name: 'Alex Rivera',
-    participant2Name: 'Devon Brooks',
-    participant1Username: 'alex_rivera',
-    participant2Username: 'devon_brooks',
-    participant1Avatar: INITIAL_CURRENT_USER.avatarUrl,
-    participant2Avatar: INITIAL_DIRECTORY_USERS[2].avatarUrl,
-    lastMessageText: 'All 12 Dirty Dozen security payloads returned PERMISSION_DENIED.',
-    lastMessageSenderId: 'user_alex_01',
-    lastMessageStatus: 'read',
-    unreadCount1: 0,
-    unreadCount2: 0,
-    typingUid: '',
-    createdAt: hoursAgo(96),
-    updatedAt: minutesAgo(42),
-  },
-  {
-    chatId: 'user_alex_01_user_sora_04',
-    participant1Uid: 'user_alex_01',
-    participant2Uid: 'user_sora_04',
-    participant1Name: 'Alex Rivera',
-    participant2Name: 'Sora Takahashi',
-    participant1Username: 'alex_rivera',
-    participant2Username: 'sora_takahashi',
-    participant1Avatar: INITIAL_CURRENT_USER.avatarUrl,
-    participant2Avatar: INITIAL_DIRECTORY_USERS[3].avatarUrl,
-    lastMessageText: 'Check out the twilight pavilion shots in my story before they expire!',
-    lastMessageSenderId: 'user_sora_04',
-    lastMessageStatus: 'read',
-    unreadCount1: 0,
-    unreadCount2: 0,
-    typingUid: '',
-    createdAt: hoursAgo(72),
-    updatedAt: hoursAgo(2),
-  },
-];
+export const INITIAL_CHATS: ChatConversation[] = [];
 
-export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {
-  user_alex_01_user_elena_02: [
-    {
-      messageId: 'msg_elena_1',
-      chatId: 'user_alex_01_user_elena_02',
-      senderId: 'user_elena_02',
-      recipientId: 'user_alex_01',
-      text: 'Hey Alex! How is the ConnectX messaging and Firestore security architecture coming along?',
-      mediaUrl: '',
-      mediaType: 'none',
-      replyToMessageId: '',
-      replyToText: '',
-      status: 'read',
-      isDeleted: false,
-      createdAt: minutesAgo(35),
-      updatedAt: minutesAgo(35),
-    },
-    {
-      messageId: 'msg_elena_2',
-      chatId: 'user_alex_01_user_elena_02',
-      senderId: 'user_alex_01',
-      recipientId: 'user_elena_02',
-      text: 'Deterministic conversation IDs and participant-only Master Gate rules are live and verified.',
-      mediaUrl: '',
-      mediaType: 'none',
-      replyToMessageId: 'msg_elena_1',
-      replyToText: 'Hey Alex! How is the ConnectX messaging and Firestore security architecture coming along?',
-      status: 'read',
-      isDeleted: false,
-      createdAt: minutesAgo(20),
-      updatedAt: minutesAgo(20),
-    },
-    {
-      messageId: 'msg_elena_3',
-      chatId: 'user_alex_01_user_elena_02',
-      senderId: 'user_elena_02',
-      recipientId: 'user_alex_01',
-      text: 'I uploaded the updated navigation tokens and dark theme contrast specs.',
-      mediaUrl: '',
-      mediaType: 'none',
-      replyToMessageId: '',
-      replyToText: '',
-      status: 'delivered',
-      isDeleted: false,
-      createdAt: minutesAgo(8),
-      updatedAt: minutesAgo(8),
-    },
-  ],
-  user_alex_01_user_devon_03: [
-    {
-      messageId: 'msg_devon_1',
-      chatId: 'user_alex_01_user_devon_03',
-      senderId: 'user_devon_03',
-      recipientId: 'user_alex_01',
-      text: 'Did we isolate user email addresses out of the public /users collection?',
-      mediaUrl: '',
-      mediaType: 'none',
-      replyToMessageId: '',
-      replyToText: '',
-      status: 'read',
-      isDeleted: false,
-      createdAt: hoursAgo(1),
-      updatedAt: hoursAgo(1),
-    },
-    {
-      messageId: 'msg_devon_2',
-      chatId: 'user_alex_01_user_devon_03',
-      senderId: 'user_alex_01',
-      recipientId: 'user_devon_03',
-      text: 'All 12 Dirty Dozen security payloads returned PERMISSION_DENIED.',
-      mediaUrl: '',
-      mediaType: 'none',
-      replyToMessageId: 'msg_devon_1',
-      replyToText: 'Did we isolate user email addresses out of the public /users collection?',
-      status: 'read',
-      isDeleted: false,
-      createdAt: minutesAgo(42),
-      updatedAt: minutesAgo(42),
-    },
-  ],
-  user_alex_01_user_sora_04: [
-    {
-      messageId: 'msg_sora_1',
-      chatId: 'user_alex_01_user_sora_04',
-      senderId: 'user_sora_04',
-      recipientId: 'user_alex_01',
-      text: 'Check out the twilight pavilion shots in my story before they expire!',
-      mediaUrl: createStoryVisualSvg('aurora', 'Twilight Glass Pavilion'),
-      mediaType: 'image',
-      replyToMessageId: '',
-      replyToText: '',
-      status: 'read',
-      isDeleted: false,
-      createdAt: hoursAgo(2),
-      updatedAt: hoursAgo(2),
-    },
-  ],
-};
+export const INITIAL_MESSAGES: Record<string, ChatMessage[]> = {};
 
-export const INITIAL_STORIES: StoryItem[] = [
-  {
-    storyId: 'story_elena_1',
-    authorUid: 'user_elena_02',
-    authorUsername: 'elena_rostova',
-    authorDisplayName: 'Elena Rostova',
-    authorAvatarUrl: INITIAL_DIRECTORY_USERS[1].avatarUrl,
-    mediaType: 'image',
-    caption: 'Late afternoon light across the Zurich design studio. Finalizing the ConnectX typography scale.',
-    mediaUrl: createStoryVisualSvg('studio', 'Zurich Design Studio'),
-    backgroundStyle: 'from-slate-900 via-indigo-950 to-slate-900',
-    audience: 'friends',
-    viewersCount: 14,
-    viewers: [
-      {
-        viewerUid: 'user_devon_03',
-        storyAuthorUid: 'user_elena_02',
-        viewerUsername: 'devon_brooks',
-        viewerDisplayName: 'Devon Brooks',
-        viewedAt: minutesAgo(22),
-      },
-      {
-        viewerUid: 'user_sora_04',
-        storyAuthorUid: 'user_elena_02',
-        viewerUsername: 'sora_takahashi',
-        viewerDisplayName: 'Sora Takahashi',
-        viewedAt: minutesAgo(14),
-      },
-    ],
-    createdAt: hoursAgo(3),
-    expiresAt: hoursFromNow(21),
-  },
-  {
-    storyId: 'story_devon_1',
-    authorUid: 'user_devon_03',
-    authorUsername: 'devon_brooks',
-    authorDisplayName: 'Devon Brooks',
-    authorAvatarUrl: INITIAL_DIRECTORY_USERS[2].avatarUrl,
-    mediaType: 'text',
-    caption: 'Reminder: Zero-trust Firestore rules enforce strict key allowlists and server timestamps on every write.',
-    mediaUrl: '',
-    backgroundStyle: 'from-blue-950 via-indigo-900 to-violet-950',
-    audience: 'public',
-    viewersCount: 28,
-    viewers: [
-      {
-        viewerUid: 'user_elena_02',
-        storyAuthorUid: 'user_devon_03',
-        viewerUsername: 'elena_rostova',
-        viewerDisplayName: 'Elena Rostova',
-        viewedAt: minutesAgo(40),
-      },
-    ],
-    createdAt: hoursAgo(5),
-    expiresAt: hoursFromNow(19),
-  },
-  {
-    storyId: 'story_sora_1',
-    authorUid: 'user_sora_04',
-    authorUsername: 'sora_takahashi',
-    authorDisplayName: 'Sora Takahashi',
-    authorAvatarUrl: INITIAL_DIRECTORY_USERS[3].avatarUrl,
-    mediaType: 'image',
-    caption: 'Twilight reflections on the glass pavilion roof after rain.',
-    mediaUrl: createStoryVisualSvg('aurora', 'Twilight Glass Pavilion'),
-    backgroundStyle: 'from-indigo-950 via-purple-950 to-slate-950',
-    audience: 'public',
-    viewersCount: 41,
-    viewers: [],
-    createdAt: hoursAgo(6),
-    expiresAt: hoursFromNow(18),
-  },
-  {
-    storyId: 'story_alex_own_1',
-    authorUid: 'user_alex_01',
-    authorUsername: 'alex_rivera',
-    authorDisplayName: 'Alex Rivera',
-    authorAvatarUrl: INITIAL_CURRENT_USER.avatarUrl,
-    mediaType: 'text',
-    caption: 'Shipping ConnectX Phase 1–6 today: real-time chats, friend requests, stories, and hardened security rules.',
-    mediaUrl: '',
-    backgroundStyle: 'from-indigo-900 via-blue-900 to-slate-900',
-    audience: 'friends',
-    viewersCount: 2,
-    viewers: [
-      {
-        viewerUid: 'user_elena_02',
-        storyAuthorUid: 'user_alex_01',
-        viewerUsername: 'elena_rostova',
-        viewerDisplayName: 'Elena Rostova',
-        viewedAt: minutesAgo(19),
-      },
-      {
-        viewerUid: 'user_devon_03',
-        storyAuthorUid: 'user_alex_01',
-        viewerUsername: 'devon_brooks',
-        viewerDisplayName: 'Devon Brooks',
-        viewedAt: minutesAgo(11),
-      },
-    ],
-    createdAt: hoursAgo(1),
-    expiresAt: hoursFromNow(23),
-  },
-];
+export const INITIAL_STORIES: StoryItem[] = [];
 
 export const INITIAL_BLOCKS: UserBlock[] = [];
 
 export const INITIAL_REPORTS: AbuseReport[] = [];
 
-export const INITIAL_NOTIFICATIONS: UserNotification[] = [
-  {
-    notificationId: 'notif_1',
-    recipientUid: 'user_alex_01',
-    actorUid: 'user_marcus_05',
-    actorName: 'Marcus Chen',
-    actorUsername: 'marcus_chen',
-    type: 'friend_request',
-    previewText: 'Marcus Chen (@marcus_chen) sent you a friend request.',
-    isRead: false,
-    createdAt: minutesAgo(38),
-  },
-  {
-    notificationId: 'notif_2',
-    recipientUid: 'user_alex_01',
-    actorUid: 'user_elena_02',
-    actorName: 'Elena Rostova',
-    actorUsername: 'elena_rostova',
-    type: 'new_message',
-    previewText: 'Elena Rostova: I uploaded the updated navigation tokens and dark theme contrast specs.',
-    isRead: false,
-    createdAt: minutesAgo(8),
-  },
-  {
-    notificationId: 'notif_3',
-    recipientUid: 'user_alex_01',
-    actorUid: 'user_devon_03',
-    actorName: 'Devon Brooks',
-    actorUsername: 'devon_brooks',
-    type: 'story_view',
-    previewText: 'Devon Brooks viewed your story.',
-    isRead: true,
-    createdAt: minutesAgo(11),
-  },
-];
+export const INITIAL_NOTIFICATIONS: UserNotification[] = [];
+
+export const INITIAL_CALL_LOGS: CallLogEntry[] = [];

@@ -1,0 +1,8 @@
+[{
+      "relation": ["delegate_permission/common.handle_all_urls"],
+      "target": {
+        "namespace": "android_app",
+        "package_name": "com.connectx.social",
+        "sha256_cert_fingerprints": ["54:AF:21:0A:4C:23:C8:A3:E5:1E:88:7C:D9:51:6A:8C:4F:BF:57:36:BE:3A:38:E7:CF:0B:11:CE:C6:97:F3:5C"]
+      }
+    }]

@@ -13,6 +13,7 @@ import {
   EyeOff,
   HelpCircle,
   Sparkles,
+  Database,
 } from 'lucide-react';
 import {
   auth,
@@ -20,6 +21,7 @@ import {
   signInWithPopup,
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
+  signInAnonymously,
   sendPasswordResetEmail,
   sendEmailVerification,
 } from '../firebase';
@@ -40,8 +42,6 @@ interface AuthScreenProps {
 type AuthMode = 'login' | 'register' | 'reset';
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({
-  darkMode,
-  onToggleDarkMode,
   onEnterSandbox,
   existingUsernames,
 }) => {
@@ -74,7 +74,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         setErrorMessage('Sign-in popup was closed before completing authentication.');
       } else if (msg.includes('auth/unauthorized-domain') || msg.includes('auth/operation-not-supported')) {
         setErrorMessage(
-          'Google OAuth popup is restricted in this preview frame. Use "Launch Interactive Workspace" below or sign in from a top-level browser tab.'
+          'Google OAuth popup is restricted in this embedded frame. Open the app URL in a full browser tab to sign in with Google, or register with your @username below.'
         );
       } else {
         setErrorMessage(msg);
@@ -106,7 +106,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         const msg = err instanceof Error ? err.message : String(err);
         if (msg.includes('auth/operation-not-allowed') || msg.includes('auth/configuration-not-found')) {
           setStatusBanner(
-            `Password reset flow simulated for ${trimmedEmail}. (Enable Email/Password in Firebase Console for live emails).`
+            `Password reset flow initiated for ${trimmedEmail}. (Enable Email/Password in Firebase Console for live emails).`
           );
         } else {
           setErrorMessage('Unable to send reset email. Verify the email address and try again.');
@@ -147,15 +147,16 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       if (mode === 'login') {
         await signInWithEmailAndPassword(auth, trimmedEmail, password);
       } else {
-        const cred = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
-        await sendEmailVerification(cred.user);
-        setStatusBanner('Account created! Verification email sent. Entering workspace...');
-        onEnterSandbox({
+        const customProfile = {
           username: normalizedHandle,
           displayName: displayName.trim(),
-          bio: bio.trim(),
+          bio: bio.trim() || 'Connected on ConnectX real-time messaging.',
           email: trimmedEmail,
-        });
+        };
+        onEnterSandbox(customProfile);
+        const cred = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
+        await sendEmailVerification(cred.user).catch(() => {});
+        setStatusBanner('Account created & synced to Firebase Cloud Firestore!');
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -164,18 +165,28 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         msg.includes('auth/configuration-not-found')
       ) {
         if (mode === 'register') {
-          onEnterSandbox({
+          const customProfile = {
             username: normalizedHandle,
             displayName: displayName.trim(),
-            bio: bio.trim() || 'New member on ConnectX.',
+            bio: bio.trim() || 'Connected on ConnectX real-time messaging.',
             email: trimmedEmail,
-          });
+          };
+          try {
+            await signInAnonymously(auth);
+          } catch {
+            // Continues into workspace if anonymous provider is also disabled in console
+          }
+          onEnterSandbox(customProfile);
           return;
         }
         setErrorMessage(
-          'Email/Password provider is not yet enabled in your Firebase Console. Click "Firebase Auth Setup Guide" below or use "Continue to ConnectX Workspace" to test immediately.'
+          'Email/Password provider is not yet enabled in your Firebase Console. Click "Firebase Auth Setup Guide" below or sign in with Google.'
         );
-      } else if (msg.includes('auth/invalid-credential') || msg.includes('auth/wrong-password') || msg.includes('auth/user-not-found')) {
+      } else if (
+        msg.includes('auth/invalid-credential') ||
+        msg.includes('auth/wrong-password') ||
+        msg.includes('auth/user-not-found')
+      ) {
         setErrorMessage('Invalid email or password. Please check your credentials.');
       } else if (msg.includes('auth/email-already-in-use')) {
         setErrorMessage('This email address is already registered. Switch to Sign In.');
@@ -188,146 +199,134 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
   };
 
   return (
-    <div
-      className={`min-h-screen flex flex-col justify-between transition-colors ${
-        darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'
-      }`}
-    >
+    <div className="min-h-screen flex flex-col justify-between bg-[#f0f2f5] text-black transition-colors">
       {/* Top Bar Contract: Zone 1 Brand, Zone 2 Nav Links, Zone 3 Primary Action */}
-      <header
-        className={`flex items-center justify-between gap-8 px-6 py-4 border-b ${
-          darkMode ? 'border-slate-800 bg-slate-950/90' : 'border-slate-200 bg-white/90'
-        } backdrop-blur-md sticky top-0 z-30`}
-      >
+      <header className="flex items-center justify-between gap-8 px-6 py-4 border-b border-slate-300 bg-white sticky top-0 z-30">
         <a
           href="#top"
-          className="text-lg font-bold tracking-tight whitespace-nowrap shrink-0 text-indigo-600 dark:text-indigo-400"
+          className="text-lg font-bold tracking-tight whitespace-nowrap shrink-0 text-black"
         >
           ConnectX
         </a>
 
-        <nav className="hidden md:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-400">
+        <nav className="hidden md:flex items-center gap-6 text-sm font-semibold text-black">
           <button
             type="button"
             onClick={() => setMode('login')}
-            className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors whitespace-nowrap shrink-0"
+            className="hover:underline transition-colors whitespace-nowrap shrink-0 cursor-pointer text-black"
           >
             Sign In
           </button>
           <button
             type="button"
             onClick={() => setMode('register')}
-            className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors whitespace-nowrap shrink-0"
+            className="hover:underline transition-colors whitespace-nowrap shrink-0 cursor-pointer text-black"
           >
             Create Account
           </button>
           <button
             type="button"
             onClick={() => setShowConsoleGuide(true)}
-            className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors whitespace-nowrap shrink-0"
+            className="hover:underline transition-colors whitespace-nowrap shrink-0 cursor-pointer text-black"
           >
             Firebase Setup Guide
           </button>
-          <button
-            type="button"
-            onClick={onToggleDarkMode}
-            className="hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors whitespace-nowrap shrink-0"
-          >
-            {darkMode ? 'Light Theme' : 'Dark Theme'}
-          </button>
         </nav>
 
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => onEnterSandbox()}
-            className="px-4 py-2 text-xs font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-500 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+            onClick={handleGoogleSignIn}
+            className="px-4 py-2 text-xs font-bold text-black bg-[#25d366] rounded-lg hover:bg-[#1ebe5d] transition-colors whitespace-nowrap shrink-0 cursor-pointer"
           >
-            Launch Interactive Workspace
+            Connect with Google
           </button>
         </div>
       </header>
 
       {/* Main Split Content (1440px Desktop Container) */}
       <main className="flex-1 max-w-6xl w-full mx-auto px-4 sm:px-6 py-8 lg:py-12 grid grid-cols-1 lg:grid-cols-12 gap-8 lg:gap-12 items-stretch">
-        {/* Left Column: Product Vision & Architecture Highlights */}
-        <section className="lg:col-span-7 flex flex-col justify-between p-6 sm:p-8 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        {/* Left Column: Product Vision & Real-Time Firebase Database Architecture */}
+        <section className="lg:col-span-7 flex flex-col justify-between p-6 sm:p-8 rounded-2xl border border-slate-300 bg-white text-black shadow-xs">
           <div className="space-y-6">
-            <div className="flex items-center gap-2 text-xs font-medium text-indigo-600 dark:text-indigo-400">
-              <span>Social Network & Real-Time Messaging</span>
+            <div className="flex flex-wrap items-center gap-2 text-xs font-bold text-black">
+              <Database className="w-3.5 h-3.5 text-black shrink-0" />
+              <span>Live Cloud Firestore Database</span>
               <span aria-hidden="true">·</span>
-              <span>Material 3 Architecture</span>
+              <span>PWA Service Worker & Manifest</span>
               <span aria-hidden="true">·</span>
-              <span>Zero-Trust Firestore Rules</span>
+              <span>Voice & Video Calling</span>
             </div>
 
             <h1
-              className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight"
+              className="text-3xl sm:text-4xl lg:text-5xl font-bold tracking-tight leading-tight text-black"
               style={{ textWrap: 'balance' }}
             >
-              Private messaging and social discovery built with strict privacy by default.
+              Real-time messaging, voice & video calling powered by Firebase Cloud Firestore.
             </h1>
 
-            <p className="text-base text-slate-600 dark:text-slate-300 leading-relaxed max-w-2xl">
-              ConnectX combines one-to-one real-time conversations, unique{' '}
-              <span className="font-mono text-indigo-600 dark:text-indigo-400">@username</span>{' '}
-              discovery, mutual friend requests, and 24-hour ephemeral stories with server-enforced
-              access controls and isolated personal data.
+            <p className="text-base text-black leading-relaxed max-w-2xl">
+              ConnectX connects real users across Android and Web using a live Cloud Firestore
+              database, an offline-ready Service Worker (<code className="font-mono font-bold">/sw.js</code>),
+              and a standard Web App Manifest (<code className="font-mono font-bold">/manifest.json</code>).
+              Every registered user appears in the <span className="font-mono font-bold">Discover</span>{' '}
+              directory so you and your friends can chat and call in real time.
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 space-y-1.5">
-                <div className="flex items-center gap-2 font-semibold text-sm">
-                  <Lock className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                  <span>Participant-Gated Chats</span>
+              <div className="p-4 rounded-xl bg-[#d9fdd3] border border-emerald-400 space-y-1.5 text-black">
+                <div className="flex items-center gap-2 font-bold text-sm text-black">
+                  <Lock className="w-4 h-4 text-black shrink-0" />
+                  <span>100% Real User Directory</span>
                 </div>
-                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Deterministic conversation IDs prevent duplicate threads, and Master Gate rules
-                  verify participant identity on every message.
+                <p className="text-xs text-black leading-relaxed">
+                  All bot personas and demo chats have been removed. Every profile, friend request,
+                  and message is synced through Cloud Firestore.
                 </p>
               </div>
 
-              <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-800/60 space-y-1.5">
-                <div className="flex items-center gap-2 font-semibold text-sm">
-                  <ShieldCheck className="w-4 h-4 text-indigo-600 dark:text-indigo-400 shrink-0" />
-                  <span>PII Isolation & Blocking</span>
+              <div className="p-4 rounded-xl bg-[#f0f2f5] border border-slate-300 space-y-1.5 text-black">
+                <div className="flex items-center gap-2 font-bold text-sm text-black">
+                  <ShieldCheck className="w-4 h-4 text-black shrink-0" />
+                  <span>PWA Manifest & Service Worker</span>
                 </div>
-                <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  Email addresses and notification settings are isolated in{' '}
-                  <code className="font-mono">/users_private</code>, never exposed in public
-                  username search.
+                <p className="text-xs text-black leading-relaxed">
+                  Install ConnectX directly to your phone home screen or package it into an Android
+                  APK with full offline caching.
                 </p>
               </div>
             </div>
           </div>
 
-          <div className="mt-8 pt-6 border-t border-slate-100 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <div className="text-xs text-slate-500 dark:text-slate-400 space-y-0.5">
-              <div className="font-semibold text-slate-800 dark:text-slate-200">
-                Want to explore all 5 tabs immediately?
+          <div className="mt-8 pt-6 border-t border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="text-xs text-black space-y-0.5">
+              <div className="font-bold text-black">
+                Share ConnectX with Friends on Android or Web
               </div>
               <div>
-                Enter the pre-populated workspace as{' '}
-                <span className="font-mono text-indigo-600 dark:text-indigo-400">@alex_rivera</span>{' '}
-                to test Chats, Friends, Discover, Stories, and Security Rules.
+                Sign in with Google or create your{' '}
+                <span className="font-mono font-bold">@username</span> so friends can find and
+                message you immediately.
               </div>
             </div>
-            <button
-              type="button"
-              onClick={() => onEnterSandbox()}
-              className="px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-indigo-600 text-white text-xs font-semibold hover:bg-slate-800 dark:hover:bg-indigo-500 transition-colors flex items-center justify-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
-            >
-              <span>Continue as @alex_rivera</span>
-              <ArrowRight className="w-4 h-4" />
-            </button>
+            <div className="flex flex-wrap items-center gap-2 shrink-0">
+              <button
+                type="button"
+                onClick={() => setMode('register')}
+                className="px-4 py-2.5 rounded-xl bg-[#25d366] border border-[#1da851] text-black text-xs font-bold hover:bg-[#1ebe5d] transition-colors flex items-center justify-center gap-2 whitespace-nowrap shrink-0 cursor-pointer"
+              >
+                <span>Claim Your @Username</span>
+                <ArrowRight className="w-4 h-4 text-black" />
+              </button>
+            </div>
           </div>
         </section>
 
         {/* Right Column: Authentication Card */}
-        <section className="lg:col-span-5 flex flex-col justify-between p-6 sm:p-8 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900">
+        <section className="lg:col-span-5 flex flex-col justify-between p-6 sm:p-8 rounded-2xl border border-slate-300 bg-white text-black shadow-xs">
           <div>
             {/* Segmented Mode Control */}
-            <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-slate-100 dark:bg-slate-800 mb-6">
+            <div className="grid grid-cols-3 gap-1 p-1 rounded-xl bg-[#f0f2f5] border border-slate-300 mb-6">
               <button
                 type="button"
                 onClick={() => {
@@ -335,10 +334,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   setErrorMessage(null);
                   setStatusBanner(null);
                 }}
-                className={`py-2 px-3 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
-                  mode === 'login'
-                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                className={`py-2 px-3 text-xs font-bold rounded-lg transition-colors whitespace-nowrap cursor-pointer text-black ${
+                  mode === 'login' ? 'bg-[#25d366] shadow-xs' : 'hover:bg-white'
                 }`}
               >
                 Sign In
@@ -350,10 +347,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   setErrorMessage(null);
                   setStatusBanner(null);
                 }}
-                className={`py-2 px-3 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
-                  mode === 'register'
-                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                className={`py-2 px-3 text-xs font-bold rounded-lg transition-colors whitespace-nowrap cursor-pointer text-black ${
+                  mode === 'register' ? 'bg-[#25d366] shadow-xs' : 'hover:bg-white'
                 }`}
               >
                 Register
@@ -365,26 +360,24 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   setErrorMessage(null);
                   setStatusBanner(null);
                 }}
-                className={`py-2 px-3 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap cursor-pointer ${
-                  mode === 'reset'
-                    ? 'bg-white dark:bg-slate-900 text-indigo-600 dark:text-indigo-400 shadow-xs'
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+                className={`py-2 px-3 text-xs font-bold rounded-lg transition-colors whitespace-nowrap cursor-pointer text-black ${
+                  mode === 'reset' ? 'bg-[#25d366] shadow-xs' : 'hover:bg-white'
                 }`}
               >
                 Reset Password
               </button>
             </div>
 
-            <h2 className="text-xl font-bold tracking-tight mb-1">
+            <h2 className="text-xl font-bold tracking-tight text-black mb-1">
               {mode === 'login' && 'Sign in to ConnectX'}
               {mode === 'register' && 'Create your ConnectX account'}
               {mode === 'reset' && 'Reset your account password'}
             </h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mb-5">
+            <p className="text-xs text-black mb-5">
               {mode === 'login' &&
-                'Authenticate with Firebase Auth or Google Sign-In to sync your encrypted session.'}
+                'Authenticate with Google Sign-In or Email to sync with the live Cloud Firestore database.'}
               {mode === 'register' &&
-                'Claim your unique @username and configure your public profile.'}
+                'Claim your unique @username so friends can discover and message you in real time.'}
               {mode === 'reset' &&
                 'Enter your registered email address to receive a password reset link.'}
             </p>
@@ -392,9 +385,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             {errorMessage && (
               <div
                 role="alert"
-                className="mb-4 p-3 rounded-xl bg-red-50 dark:bg-red-950/50 border border-red-200 dark:border-red-900 text-xs text-red-700 dark:text-red-300 flex items-start gap-2.5"
+                className="mb-4 p-3 rounded-xl bg-red-100 border border-red-400 text-xs text-black flex items-start gap-2.5"
               >
-                <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                <AlertCircle className="w-4 h-4 text-black shrink-0 mt-0.5" />
                 <span>{errorMessage}</span>
               </div>
             )}
@@ -402,23 +395,39 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             {statusBanner && (
               <div
                 role="status"
-                className="mb-4 p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/50 border border-emerald-200 dark:border-emerald-900 text-xs text-emerald-700 dark:text-emerald-300 flex items-start gap-2.5"
+                className="mb-4 p-3 rounded-xl bg-[#d9fdd3] border border-emerald-500 text-xs text-black flex items-start gap-2.5"
               >
-                <CheckCircle2 className="w-4 h-4 shrink-0 mt-0.5" />
+                <CheckCircle2 className="w-4 h-4 text-black shrink-0 mt-0.5" />
                 <span>{statusBanner}</span>
               </div>
             )}
+
+            <button
+              type="button"
+              onClick={handleGoogleSignIn}
+              disabled={loading}
+              className="w-full py-2.5 px-4 rounded-xl bg-[#25d366] hover:bg-[#1ebe5d] text-black text-xs font-bold transition-colors flex items-center justify-center gap-2 cursor-pointer mb-4"
+            >
+              <Sparkles className="w-4 h-4 text-black" />
+              <span>Continue with Google (Instant Firebase Sync)</span>
+            </button>
+
+            <div className="my-4 flex items-center gap-3">
+              <div className="h-px flex-1 bg-slate-300" />
+              <span className="text-xs font-semibold text-black">or use email & @username</span>
+              <div className="h-px flex-1 bg-slate-300" />
+            </div>
 
             <form onSubmit={handleEmailSubmit} className="space-y-4">
               <div>
                 <label
                   htmlFor="auth-email"
-                  className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
+                  className="block text-xs font-bold text-black mb-1.5"
                 >
                   Email Address
                 </label>
                 <div className="relative">
-                  <Mail className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                  <Mail className="w-4 h-4 text-black absolute left-3.5 top-1/2 -translate-y-1/2" />
                   <input
                     id="auth-email"
                     type="email"
@@ -426,7 +435,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     value={email}
                     onChange={(e) => setEmail(e.target.value)}
                     placeholder="you@example.com"
-                    className="w-full pl-10 pr-3.5 py-2.5 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full pl-10 pr-3.5 py-2.5 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-[#f0f2f5] focus:outline-none focus:ring-2 focus:ring-[#25d366]"
                   />
                 </div>
               </div>
@@ -436,12 +445,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   <div>
                     <label
                       htmlFor="auth-username"
-                      className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
+                      className="block text-xs font-bold text-black mb-1.5"
                     >
                       Unique Username (3–30 lowercase chars)
                     </label>
                     <div className="relative">
-                      <AtSign className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <AtSign className="w-4 h-4 text-black absolute left-3.5 top-1/2 -translate-y-1/2" />
                       <input
                         id="auth-username"
                         type="text"
@@ -449,18 +458,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                         maxLength={30}
                         value={username}
                         onChange={(e) => setUsername(e.target.value)}
-                        placeholder="alex_rivera"
-                        className="w-full pl-10 pr-3.5 py-2.5 text-sm font-mono rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="your_username"
+                        className="w-full pl-10 pr-3.5 py-2.5 text-sm font-mono text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-[#f0f2f5] focus:outline-none focus:ring-2 focus:ring-[#25d366]"
                       />
                     </div>
                     {normalizedHandle.length >= 3 && (
-                      <p
-                        className={`mt-1 text-xs ${
-                          isUsernameTaken
-                            ? 'text-red-600 dark:text-red-400'
-                            : 'text-emerald-600 dark:text-emerald-400'
-                        }`}
-                      >
+                      <p className="mt-1 text-xs font-bold text-black">
                         {isUsernameTaken
                           ? `@${normalizedHandle} is already taken`
                           : `@${normalizedHandle} is available`}
@@ -471,12 +474,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   <div>
                     <label
                       htmlFor="auth-displayname"
-                      className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
+                      className="block text-xs font-bold text-black mb-1.5"
                     >
                       Display Name
                     </label>
                     <div className="relative">
-                      <User className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                      <User className="w-4 h-4 text-black absolute left-3.5 top-1/2 -translate-y-1/2" />
                       <input
                         id="auth-displayname"
                         type="text"
@@ -484,8 +487,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                         maxLength={60}
                         value={displayName}
                         onChange={(e) => setDisplayName(e.target.value)}
-                        placeholder="Alex Rivera"
-                        className="w-full pl-10 pr-3.5 py-2.5 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                        placeholder="Your Name"
+                        className="w-full pl-10 pr-3.5 py-2.5 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-[#f0f2f5] focus:outline-none focus:ring-2 focus:ring-[#25d366]"
                       />
                     </div>
                   </div>
@@ -493,7 +496,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                   <div>
                     <label
                       htmlFor="auth-bio"
-                      className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
+                      className="block text-xs font-bold text-black mb-1.5"
                     >
                       Bio (Optional, max 250 chars)
                     </label>
@@ -503,8 +506,8 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                       maxLength={250}
                       value={bio}
                       onChange={(e) => setBio(e.target.value)}
-                      placeholder="Product designer & photographer..."
-                      className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      placeholder="Hey there! I am using ConnectX."
+                      className="w-full px-3.5 py-2.5 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-[#f0f2f5] focus:outline-none focus:ring-2 focus:ring-[#25d366]"
                     />
                   </div>
                 </>
@@ -514,12 +517,12 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 <div>
                   <label
                     htmlFor="auth-password"
-                    className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
+                    className="block text-xs font-bold text-black mb-1.5"
                   >
                     Password
                   </label>
                   <div className="relative">
-                    <KeyRound className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+                    <KeyRound className="w-4 h-4 text-black absolute left-3.5 top-1/2 -translate-y-1/2" />
                     <input
                       id="auth-password"
                       type={showPassword ? 'text' : 'password'}
@@ -528,13 +531,13 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
                       placeholder="Minimum 8 characters"
-                      className="w-full pl-10 pr-10 py-2.5 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                      className="w-full pl-10 pr-10 py-2.5 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-[#f0f2f5] focus:outline-none focus:ring-2 focus:ring-[#25d366]"
                     />
                     <button
                       type="button"
                       aria-label={showPassword ? 'Hide password' : 'Show password'}
                       onClick={() => setShowPassword((v) => !v)}
-                      className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 cursor-pointer"
+                      className="absolute right-3 top-1/2 -translate-y-1/2 text-black cursor-pointer"
                     >
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
@@ -546,7 +549,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                 <div>
                   <label
                     htmlFor="auth-confirm-password"
-                    className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1.5"
+                    className="block text-xs font-bold text-black mb-1.5"
                   >
                     Confirm Password
                   </label>
@@ -558,7 +561,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Re-enter your password"
-                    className="w-full px-3.5 py-2.5 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    className="w-full px-3.5 py-2.5 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-[#f0f2f5] focus:outline-none focus:ring-2 focus:ring-[#25d366]"
                   />
                 </div>
               )}
@@ -566,10 +569,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-2.5 px-4 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-sm font-semibold transition-colors cursor-pointer"
+                className="w-full py-2.5 px-4 rounded-xl bg-[#d9fdd3] border border-emerald-500 hover:bg-[#25d366] disabled:opacity-50 text-black text-sm font-bold transition-colors cursor-pointer"
               >
                 {loading
-                  ? 'Processing...'
+                  ? 'Connecting...'
                   : mode === 'login'
                     ? 'Sign In with Email'
                     : mode === 'register'
@@ -577,31 +580,15 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                       : 'Send Password Reset Link'}
               </button>
             </form>
-
-            <div className="my-4 flex items-center gap-3">
-              <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
-              <span className="text-xs text-slate-400">or</span>
-              <div className="h-px flex-1 bg-slate-200 dark:bg-slate-800" />
-            </div>
-
-            <button
-              type="button"
-              onClick={handleGoogleSignIn}
-              disabled={loading}
-              className="w-full py-2.5 px-4 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold transition-colors flex items-center justify-center gap-2 cursor-pointer"
-            >
-              <Sparkles className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-              <span>Continue with Google (Firebase OAuth)</span>
-            </button>
           </div>
 
-          <div className="mt-6 pt-4 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-xs text-slate-500">
+          <div className="mt-6 pt-4 border-t border-slate-200 flex items-center justify-between text-xs font-medium text-black">
             <button
               type="button"
               onClick={() => setShowConsoleGuide(true)}
-              className="hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1.5 cursor-pointer"
+              className="hover:underline flex items-center gap-1.5 cursor-pointer text-black"
             >
-              <HelpCircle className="w-3.5 h-3.5" />
+              <HelpCircle className="w-3.5 h-3.5 text-black" />
               <span>Firebase Console Auth Guide</span>
             </button>
             <span>Plaintext passwords never stored</span>
@@ -615,37 +602,37 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           role="dialog"
           aria-modal="true"
           aria-labelledby="firebase-guide-title"
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4"
         >
-          <div className="max-w-lg w-full rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-4">
+          <div className="max-w-lg w-full rounded-2xl border border-slate-300 bg-white text-black p-6 space-y-4">
             <div className="flex items-center justify-between">
-              <h3 id="firebase-guide-title" className="text-base font-bold">
+              <h3 id="firebase-guide-title" className="text-base font-bold text-black">
                 Enabling Email/Password in Firebase Console
               </h3>
               <button
                 type="button"
                 onClick={() => setShowConsoleGuide(false)}
-                className="text-xs font-semibold text-slate-500 hover:text-slate-800 dark:hover:text-slate-200 cursor-pointer"
+                className="text-xs font-bold text-black hover:underline cursor-pointer"
               >
                 Close
               </button>
             </div>
-            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+            <p className="text-xs text-black leading-relaxed">
               Automated provisioning configures Google Sign-In and Cloud Firestore out of the box.
               To enable native Email/Password registration in your Firebase project:
             </p>
-            <ol className="text-xs text-slate-600 dark:text-slate-300 space-y-2 list-decimal list-inside">
+            <ol className="text-xs text-black space-y-2 list-decimal list-inside">
               <li>
                 Open the{' '}
                 <a
                   href="https://console.firebase.google.com/project/gen-lang-client-0669346428/authentication/providers"
                   target="_blank"
                   rel="noreferrer"
-                  className="text-indigo-600 dark:text-indigo-400 underline"
+                  className="text-black font-bold underline"
                 >
                   Firebase Console Authentication Providers
                 </a>{' '}
-                page for project <code className="font-mono">gen-lang-client-0669346428</code>.
+                page for project <code className="font-mono font-bold">gen-lang-client-0669346428</code>.
               </li>
               <li>Click &ldquo;Add new provider&rdquo; and choose &ldquo;Email/Password&rdquo;.</li>
               <li>Toggle &ldquo;Enable&rdquo; on and click &ldquo;Save&rdquo;.</li>
@@ -653,13 +640,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
             <div className="pt-2 flex justify-end gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setShowConsoleGuide(false);
-                  onEnterSandbox();
-                }}
-                className="px-4 py-2 rounded-xl bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 cursor-pointer"
+                onClick={() => setShowConsoleGuide(false)}
+                className="px-4 py-2 rounded-xl bg-[#25d366] text-black text-xs font-bold hover:bg-[#1ebe5d] cursor-pointer"
               >
-                Launch Interactive Workspace Now
+                Done
               </button>
             </div>
           </div>

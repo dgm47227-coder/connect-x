@@ -9,7 +9,7 @@ import {
   Flag,
   MessageSquare,
   X,
-  Shield,
+  Database,
 } from 'lucide-react';
 import {
   FriendRequest,
@@ -77,11 +77,6 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
       )
     : discoverableUsers;
 
-  // Transparent Suggested Users logic: non-friends who share mutual connections
-  const suggestedUsers = discoverableUsers.filter(
-    (u) => !friendUids.has(u.uid) && (u.mutualFriendsCount || 0) > 0
-  );
-
   const getRelationshipState = (targetUid: string) => {
     if (friendUids.has(targetUid)) {
       return { status: 'friends' as const };
@@ -108,150 +103,63 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
   };
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 text-black">
       {/* Search Bar Card */}
-      <div className="p-6 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-4">
+      <div className="p-6 rounded-2xl border border-slate-300 bg-white space-y-4 shadow-xs">
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
           <div>
-            <h1 className="text-xl font-bold tracking-tight">Discover People</h1>
-            <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
-              Search by unique <span className="font-mono">@username</span>. Email addresses, phone
-              numbers, and private settings are never exposed in public discovery.
+            <h1 className="text-xl font-bold tracking-tight text-black">
+              Discover Real ConnectX Users
+            </h1>
+            <p className="text-xs text-black mt-0.5">
+              Synced live with Cloud Firestore (
+              <code className="font-mono font-bold">/users</code>). All bot/AI accounts are removed
+              — only real registered users appear here.
             </p>
           </div>
-          <div className="flex items-center gap-1.5 text-xs text-indigo-600 dark:text-indigo-400 font-medium">
-            <Shield className="w-4 h-4 shrink-0" />
-            <span>PII-Free Public Index</span>
+          <div className="flex items-center gap-1.5 text-xs text-black font-bold">
+            <Database className="w-4 h-4 text-black shrink-0" />
+            <span>Live Firebase Directory ({discoverableUsers.length} other users)</span>
           </div>
         </div>
 
         <div className="relative">
-          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <Search className="w-4 h-4 text-black absolute left-3.5 top-1/2 -translate-y-1/2" />
           <input
             type="text"
             aria-label="Search users by username"
             value={query}
             onChange={(e) => setQuery(e.target.value)}
-            placeholder="Search by @username (e.g. marcus_chen, nadia_lin, elena_rostova)..."
-            className="w-full pl-10 pr-4 py-3 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/80 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+            placeholder="Search real users by @username or display name..."
+            className="w-full pl-10 pr-4 py-3 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-[#f0f2f5] focus:outline-none focus:ring-2 focus:ring-[#25d366]"
           />
         </div>
       </div>
 
-      {/* Suggested Connections (Transparent Selection Logic) */}
-      {!normalizedQuery && suggestedUsers.length > 0 && (
-        <section className="space-y-3">
-          <div className="flex items-center justify-between px-1">
-            <h2 className="text-sm font-bold tracking-tight">
-              Suggested Connections (Based on Mutual Friends)
-            </h2>
-            <span className="text-xs text-slate-500">
-              Ranked by verified mutual friendships
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            {suggestedUsers.map((user) => {
-              const rel = getRelationshipState(user.uid);
-              return (
-                <div
-                  key={user.uid}
-                  className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col justify-between gap-4"
-                >
-                  <div className="space-y-3">
-                    <div className="flex items-start justify-between gap-3">
-                      <img
-                        src={user.avatarUrl}
-                        alt={user.displayName}
-                        referrerPolicy="no-referrer"
-                        className="w-12 h-12 rounded-full object-cover shrink-0"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => setPreviewUser(user)}
-                        className="text-xs font-semibold text-slate-500 hover:text-indigo-600 dark:hover:text-indigo-400 flex items-center gap-1 cursor-pointer"
-                      >
-                        <Eye className="w-3.5 h-3.5" />
-                        <span>Preview</span>
-                      </button>
-                    </div>
-
-                    <div>
-                      <h3 className="text-sm font-bold">{user.displayName}</h3>
-                      <p className="text-xs font-mono text-indigo-600 dark:text-indigo-400">
-                        @{user.username}
-                      </p>
-                      <p className="text-xs text-slate-600 dark:text-slate-300 mt-1.5 line-clamp-2">
-                        {user.bio}
-                      </p>
-                    </div>
-
-                    <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                      {user.suggestionReason || `${user.mutualFriendsCount} mutual friends`}
-                    </div>
-                  </div>
-
-                  <div className="pt-3 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2">
-                    {rel.status === 'none' && (
-                      <button
-                        type="button"
-                        disabled={user.privacyWhoCanRequest === 'none'}
-                        onClick={() => onSendFriendRequest(user)}
-                        className="w-full py-2 px-3 rounded-xl bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <UserPlus className="w-3.5 h-3.5" />
-                        <span>
-                          {user.privacyWhoCanRequest === 'none'
-                            ? 'Requests Disabled'
-                            : 'Add Friend'}
-                        </span>
-                      </button>
-                    )}
-                    {rel.status === 'outgoing' && rel.request && (
-                      <button
-                        type="button"
-                        onClick={() => onCancelFriendRequest(rel.request!)}
-                        className="w-full py-2 px-3 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-red-50 dark:hover:bg-red-950/40 hover:text-red-600 text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <Clock className="w-3.5 h-3.5" />
-                        <span>Pending (Cancel)</span>
-                      </button>
-                    )}
-                    {rel.status === 'incoming' && rel.request && (
-                      <button
-                        type="button"
-                        onClick={() => onAcceptFriendRequest(rel.request!)}
-                        className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold transition-colors flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <UserCheck className="w-3.5 h-3.5" />
-                        <span>Accept Request</span>
-                      </button>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </section>
-      )}
-
       {/* Directory / Search Results */}
       <section className="space-y-3">
         <div className="flex items-center justify-between px-1">
-          <h2 className="text-sm font-bold tracking-tight">
+          <h2 className="text-sm font-bold tracking-tight text-black">
             {normalizedQuery
               ? `Search Results for "${normalizedQuery}" (${searchResults.length})`
-              : `Public Directory (${searchResults.length})`}
+              : `Registered Users in Cloud Firestore (${searchResults.length})`}
           </h2>
-          <span className="text-xs text-slate-500">Click any card to inspect full profile</span>
+          <span className="text-xs text-black">
+            Your handle: <strong className="font-mono text-black">@{currentUser.username}</strong>
+          </span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           {searchResults.length === 0 ? (
-            <div className="col-span-full p-8 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-center space-y-2">
-              <p className="text-sm font-semibold">No matching @username found</p>
-              <p className="text-xs text-slate-500">
-                Try searching for another handle such as @elena_rostova or @nadia_lin.
+            <div className="col-span-full p-8 rounded-2xl border border-slate-300 bg-white text-center space-y-3 text-black">
+              <p className="text-sm font-bold text-black">
+                {normalizedQuery
+                  ? `No user found matching "@${normalizedQuery}"`
+                  : 'No other users have joined your Firebase database yet'}
+              </p>
+              <p className="text-xs text-black max-w-md mx-auto leading-relaxed">
+                All fake bot accounts have been deleted. As soon as your friends sign in to
+                ConnectX, their profile will appear here automatically in real time!
               </p>
             </div>
           ) : (
@@ -260,7 +168,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
               return (
                 <div
                   key={user.uid}
-                  className="p-5 rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex items-start justify-between gap-4"
+                  className="p-5 rounded-2xl border border-slate-300 bg-white flex items-start justify-between gap-4 text-black"
                 >
                   <div className="flex items-start gap-3.5 min-w-0">
                     <img
@@ -271,17 +179,17 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                     />
                     <div className="min-w-0">
                       <div className="flex items-center gap-2">
-                        <h3 className="text-sm font-bold truncate">{user.displayName}</h3>
-                        <span className="text-xs text-slate-400 tabular-nums">
+                        <h3 className="text-sm font-bold text-black truncate">
+                          {user.displayName}
+                        </h3>
+                        <span className="text-xs text-black tabular-nums">
                           · {user.friendsCount} friends
                         </span>
                       </div>
-                      <p className="text-xs font-mono text-indigo-600 dark:text-indigo-400">
+                      <p className="text-xs font-mono font-semibold text-black">
                         @{user.username}
                       </p>
-                      <p className="text-xs text-slate-600 dark:text-slate-300 mt-1 line-clamp-2">
-                        {user.bio}
-                      </p>
+                      <p className="text-xs text-black mt-1 line-clamp-2">{user.bio}</p>
                     </div>
                   </div>
 
@@ -289,9 +197,10 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                     <button
                       type="button"
                       onClick={() => setPreviewUser(user)}
-                      className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 text-xs font-semibold transition-colors cursor-pointer"
+                      className="px-3 py-1.5 rounded-lg border border-slate-300 bg-[#f0f2f5] hover:bg-slate-200 text-black text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer"
                     >
-                      View Profile
+                      <Eye className="w-3.5 h-3.5 text-black" />
+                      <span>View Profile</span>
                     </button>
 
                     {rel.status === 'friends' && (
@@ -300,31 +209,45 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                         onClick={() =>
                           onStartChat(user.uid, user.displayName, user.username, user.avatarUrl)
                         }
-                        className="px-3 py-1.5 rounded-lg bg-indigo-600/10 text-indigo-600 dark:text-indigo-300 text-xs font-semibold hover:bg-indigo-600/20 flex items-center gap-1 cursor-pointer"
+                        className="px-3 py-1.5 rounded-lg bg-[#25d366] text-black text-xs font-bold hover:bg-[#1ebe5d] flex items-center gap-1 cursor-pointer"
                       >
-                        <MessageSquare className="w-3.5 h-3.5" />
+                        <MessageSquare className="w-3.5 h-3.5 text-black" />
                         <span>Message</span>
                       </button>
                     )}
 
                     {rel.status === 'none' && (
-                      <button
-                        type="button"
-                        onClick={() => onSendFriendRequest(user)}
-                        className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white text-xs font-semibold hover:bg-indigo-500 flex items-center gap-1 cursor-pointer"
-                      >
-                        <UserPlus className="w-3.5 h-3.5" />
-                        <span>Add Friend</span>
-                      </button>
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() =>
+                            onStartChat(user.uid, user.displayName, user.username, user.avatarUrl)
+                          }
+                          className="px-3 py-1.5 rounded-lg border border-slate-300 bg-[#f0f2f5] hover:bg-slate-200 text-black text-xs font-bold flex items-center gap-1 cursor-pointer"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5 text-black" />
+                          <span>Chat</span>
+                        </button>
+                        <button
+                          type="button"
+                          disabled={user.privacyWhoCanRequest === 'none'}
+                          onClick={() => onSendFriendRequest(user)}
+                          className="px-3 py-1.5 rounded-lg bg-[#25d366] disabled:opacity-50 text-black text-xs font-bold hover:bg-[#1ebe5d] flex items-center gap-1 cursor-pointer"
+                        >
+                          <UserPlus className="w-3.5 h-3.5 text-black" />
+                          <span>Add Friend</span>
+                        </button>
+                      </div>
                     )}
 
                     {rel.status === 'outgoing' && rel.request && (
                       <button
                         type="button"
                         onClick={() => onCancelFriendRequest(rel.request!)}
-                        className="px-3 py-1.5 rounded-lg border border-slate-300 dark:border-slate-700 text-xs font-semibold text-slate-600 dark:text-slate-300 hover:text-red-600 cursor-pointer"
+                        className="px-3 py-1.5 rounded-lg border border-slate-300 bg-[#f0f2f5] text-xs font-bold text-black hover:bg-red-100 flex items-center gap-1 cursor-pointer"
                       >
-                        Cancel Request
+                        <Clock className="w-3.5 h-3.5 text-black" />
+                        <span>Cancel Request</span>
                       </button>
                     )}
 
@@ -332,9 +255,10 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                       <button
                         type="button"
                         onClick={() => onAcceptFriendRequest(rel.request!)}
-                        className="px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 cursor-pointer"
+                        className="px-3 py-1.5 rounded-lg bg-[#25d366] text-black text-xs font-bold hover:bg-[#1ebe5d] flex items-center gap-1 cursor-pointer"
                       >
-                        Accept Request
+                        <UserCheck className="w-3.5 h-3.5 text-black" />
+                        <span>Accept Request</span>
                       </button>
                     )}
                   </div>
@@ -351,9 +275,9 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
           role="dialog"
           aria-modal="true"
           aria-labelledby="profile-preview-title"
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4"
         >
-          <div className="max-w-md w-full rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-5">
+          <div className="max-w-md w-full rounded-2xl border border-slate-300 bg-white text-black p-6 space-y-5">
             <div className="flex items-start justify-between gap-4">
               <div className="flex items-center gap-3.5">
                 <img
@@ -363,13 +287,13 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                   className="w-14 h-14 rounded-full object-cover"
                 />
                 <div>
-                  <h3 id="profile-preview-title" className="text-base font-bold">
+                  <h3 id="profile-preview-title" className="text-base font-bold text-black">
                     {previewUser.displayName}
                   </h3>
-                  <p className="text-xs font-mono text-indigo-600 dark:text-indigo-400">
+                  <p className="text-xs font-mono font-semibold text-black">
                     @{previewUser.username}
                   </p>
-                  <div className="flex items-center gap-1.5 text-xs text-slate-500 mt-1 tabular-nums">
+                  <div className="flex items-center gap-1.5 text-xs text-black mt-1 tabular-nums">
                     <span>{previewUser.friendsCount} Friends</span>
                     <span aria-hidden="true">·</span>
                     <span>
@@ -384,34 +308,24 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                 type="button"
                 aria-label="Close profile preview"
                 onClick={() => setPreviewUser(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+                className="p-1.5 rounded-lg text-black hover:bg-slate-100 cursor-pointer"
               >
-                <X className="w-4 h-4" />
+                <X className="w-4 h-4 text-black" />
               </button>
             </div>
 
-            <p className="text-xs text-slate-600 dark:text-slate-300 leading-relaxed">
+            <p className="text-xs text-black leading-relaxed">
               {previewUser.bio || 'No bio provided.'}
             </p>
 
-            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 text-xs text-slate-500 space-y-1">
+            <div className="p-3 rounded-xl bg-[#f0f2f5] text-xs text-black space-y-1">
               <div>
-                <span className="font-semibold text-slate-700 dark:text-slate-300">
-                  Privacy Policy:
-                </span>{' '}
-                Email address and phone number are hidden by ConnectX PII Isolation.
+                <span className="font-bold text-black">Privacy Policy:</span> Email address and
+                phone number are hidden by ConnectX PII Isolation.
               </div>
-              {previewUser.suggestionReason && (
-                <div>
-                  <span className="font-semibold text-slate-700 dark:text-slate-300">
-                    Connection Context:
-                  </span>{' '}
-                  {previewUser.suggestionReason}
-                </div>
-              )}
             </div>
 
-            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-100 dark:border-slate-800">
+            <div className="flex flex-wrap items-center justify-between gap-2 pt-2 border-t border-slate-200">
               <div className="flex items-center gap-2">
                 <button
                   type="button"
@@ -419,9 +333,9 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                     onBlockUser(previewUser, 'Blocked from profile preview');
                     setPreviewUser(null);
                   }}
-                  className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-red-50 dark:hover:bg-red-950/40 text-red-600 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                  className="px-3 py-2 rounded-xl border border-slate-300 bg-[#f0f2f5] hover:bg-red-100 text-black text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                 >
-                  <Ban className="w-3.5 h-3.5" />
+                  <Ban className="w-3.5 h-3.5 text-black" />
                   <span>Block</span>
                 </button>
                 <button
@@ -431,9 +345,9 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
                     setPreviewUser(null);
                     onReportTarget(u.uid, `@${u.username}`, 'user');
                   }}
-                  className="px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 hover:bg-amber-50 dark:hover:bg-amber-950/40 text-amber-600 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
+                  className="px-3 py-2 rounded-xl border border-slate-300 bg-[#f0f2f5] hover:bg-amber-100 text-black text-xs font-bold flex items-center gap-1.5 cursor-pointer"
                 >
-                  <Flag className="w-3.5 h-3.5" />
+                  <Flag className="w-3.5 h-3.5 text-black" />
                   <span>Report</span>
                 </button>
               </div>
@@ -441,7 +355,7 @@ export const DiscoverView: React.FC<DiscoverViewProps> = ({
               <button
                 type="button"
                 onClick={() => setPreviewUser(null)}
-                className="px-4 py-2 rounded-xl bg-slate-900 dark:bg-slate-800 text-white text-xs font-semibold cursor-pointer"
+                className="px-4 py-2 rounded-xl bg-[#25d366] text-black text-xs font-bold cursor-pointer"
               >
                 Done
               </button>

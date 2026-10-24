@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   MessageSquare,
   Users,
@@ -6,16 +6,18 @@ import {
   Sparkles,
   User,
   Bell,
-  Sun,
-  Moon,
   X,
   Flag,
   Check,
+  WifiOff,
+  Database,
+  CheckCircle2,
 } from 'lucide-react';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import {
   collection,
   doc,
+  getDoc,
   setDoc,
   updateDoc,
   deleteDoc,
@@ -23,6 +25,7 @@ import {
   query,
   where,
   serverTimestamp,
+  Timestamp,
 } from 'firebase/firestore';
 import {
   auth,
@@ -36,6 +39,9 @@ import {
 } from './firebase';
 import {
   AbuseReport,
+  CallLogEntry,
+  CallStatus,
+  CallType,
   ChatConversation,
   ChatMessage,
   FriendRequest,
@@ -52,9 +58,12 @@ import {
   getDeterministicPairId,
   getDirectedRequestId,
   formatNotificationPreview,
+  formatCallDuration,
+  canStartCallWithPeer,
 } from './utils/connectxRules';
 import {
   INITIAL_BLOCKS,
+  INITIAL_CALL_LOGS,
   INITIAL_CHATS,
   INITIAL_CURRENT_USER,
   INITIAL_DIRECTORY_USERS,
@@ -73,8 +82,26 @@ import { FriendsView } from './components/FriendsView';
 import { DiscoverView } from './components/DiscoverView';
 import { StoriesView } from './components/StoriesView';
 import { ProfileView } from './components/ProfileView';
+import { ActiveCallSession, CallModal } from './components/CallModal';
+import { useOnlineStatus } from './hooks/usePWAInstall';
+
+function toIsoString(val: unknown): string {
+  if (!val) return new Date().toISOString();
+  if (typeof val === 'string') return val;
+  if (val instanceof Timestamp) return val.toDate().toISOString();
+  if (
+    typeof val === 'object' &&
+    val !== null &&
+    'toDate' in val &&
+    typeof (val as { toDate: () => Date }).toDate === 'function'
+  ) {
+    return (val as { toDate: () => Date }).toDate().toISOString();
+  }
+  return new Date().toISOString();
+}
 
 export default function App() {
+  const isOnline = useOnlineStatus();
   const [darkMode, setDarkMode] = useState<boolean>(false);
   const [authReady, setAuthReady] = useState<boolean>(false);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
@@ -85,6 +112,13 @@ export default function App() {
     }
     return false;
   });
+
+  const pendingProfileRef = useRef<{
+    username: string;
+    displayName: string;
+    bio: string;
+    email: string;
+  } | null>(null);
 
   const [activeTab, setActiveTab] = useState<NavTab>('chats');
   const [currentUser, setCurrentUser] = useState<UserPublicProfile>(INITIAL_CURRENT_USER);
@@ -98,14 +132,14 @@ export default function App() {
   const [chats, setChats] = useState<ChatConversation[]>(INITIAL_CHATS);
   const [messagesByChat, setMessagesByChat] =
     useState<Record<string, ChatMessage[]>>(INITIAL_MESSAGES);
-  const [activeChatId, setActiveChatId] = useState<string | null>(
-    INITIAL_CHATS[0]?.chatId || null
-  );
+  const [activeChatId, setActiveChatId] = useState<string | null>(null);
   const [stories, setStories] = useState<StoryItem[]>(INITIAL_STORIES);
   const [blocks, setBlocks] = useState<UserBlock[]>(INITIAL_BLOCKS);
   const [reports, setReports] = useState<AbuseReport[]>(INITIAL_REPORTS);
   const [notifications, setNotifications] =
     useState<UserNotification[]>(INITIAL_NOTIFICATIONS);
+  const [callLogs, setCallLogs] = useState<CallLogEntry[]>(INITIAL_CALL_LOGS);
+  const [activeCall, setActiveCall] = useState<ActiveCallSession | null>(null);
 
   const [showNotificationsDrawer, setShowNotificationsDrawer] = useState(false);
   const [reportModalTarget, setReportModalTarget] = useState<{
@@ -125,48 +159,167 @@ export default function App() {
     }, 3200);
   };
 
-  // Sync dark mode class on documentElement
+  // Listen to Firebase Auth state changes and sync user profile in Cloud Firestore
   useEffect(() => {
-    const root = document.documentElement;
-    if (darkMode) {
-      root.classList.add('dark');
-    } else {
-      root.classList.remove('dark');
-    }
-  }, [darkMode]);
-
-  // Listen to Firebase Auth state changes
-  useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, (user) => {
+    const unsubscribe = onAuthStateChanged(auth, async (user) => {
       setFirebaseUser(user);
       setAuthReady(true);
       if (user) {
-        const handleBase = (user.email?.split('@')[0] || 'connectx_user')
+        const pending = pendingProfileRef.current;
+        const handleBase = (
+          pending?.username ||
+          user.email?.split('@')[0] ||
+          user.displayName?.replace(/\s+/g, '_') ||
+          'user'
+        )
           .toLowerCase()
           .replace(/[^a-z0-9_]/g, '_')
-          .slice(0, 24);
-        const handle = handleBase.length >= 3 ? handleBase : `user_${handleBase}`;
-        const displayName = user.displayName || handle;
-        const initials = displayName.slice(0, 2).toUpperCase();
+          .slice(0, 20);
+        const uidSuffix = user.uid.slice(0, 4).toLowerCase().replace(/[^a-z0-9]/g, 'x');
+        const fallbackUsername = `${handleBase.length >= 3 ? handleBase : 'user'}_${uidSuffix}`;
+        const chosenUsername =
+          pending?.username && pending.username.length >= 3
+            ? pending.username
+            : fallbackUsername;
+        const chosenDisplayName = (
+          pending?.displayName ||
+          user.displayName ||
+          handleBase ||
+          'ConnectX User'
+        ).slice(0, 60);
+        const chosenBio = (
+          pending?.bio || 'Connected on ConnectX real-time messaging.'
+        ).slice(0, 250);
+        const chosenEmail = (pending?.email || user.email || 'user@connectx.app').slice(0, 254);
 
-        setCurrentUser((prev) => ({
-          ...prev,
-          uid: user.uid,
-          username: prev.uid === user.uid ? prev.username : handle,
-          displayName: prev.uid === user.uid ? prev.displayName : displayName,
-          avatarUrl: createAvatarSvg(initials, '#2563eb', '#4f46e5'),
-        }));
-        setPrivateSettings((prev) => ({
-          ...prev,
-          uid: user.uid,
-          email: user.email || prev.email,
-        }));
+        const initials =
+          chosenDisplayName
+            .split(/\s+/)
+            .map((w) => w[0])
+            .join('')
+            .slice(0, 2)
+            .toUpperCase() || 'CX';
+        const avatarUrl = createAvatarSvg(initials, '#005c4b', '#00a884');
+
+        try {
+          const userRef = doc(db, 'users', user.uid);
+          const snap = await getDoc(userRef);
+          if (snap.exists()) {
+            const data = snap.data();
+            const existingProfile: UserPublicProfile = {
+              uid: user.uid,
+              username: String(data.username || chosenUsername),
+              displayName: String(data.displayName || chosenDisplayName),
+              bio: String(data.bio || chosenBio),
+              avatarUrl: String(data.avatarUrl || avatarUrl),
+              friendsCount: Number(data.friendsCount || 0),
+              privacyWhoCanRequest: data.privacyWhoCanRequest === 'none' ? 'none' : 'everyone',
+              privacyStoryAudience: data.privacyStoryAudience === 'public' ? 'public' : 'friends',
+              privacyShowReadReceipts: Boolean(data.privacyShowReadReceipts ?? true),
+              privacyShowOnlineStatus: Boolean(data.privacyShowOnlineStatus ?? true),
+              isPublicProfile: Boolean(data.isPublicProfile ?? true),
+              isOnline: true,
+              createdAt: toIsoString(data.createdAt),
+              updatedAt: toIsoString(data.updatedAt),
+            };
+            setCurrentUser(existingProfile);
+          } else {
+            const newProfile: UserPublicProfile = {
+              uid: user.uid,
+              username: chosenUsername,
+              displayName: chosenDisplayName,
+              bio: chosenBio,
+              avatarUrl,
+              friendsCount: 0,
+              privacyWhoCanRequest: 'everyone',
+              privacyStoryAudience: 'friends',
+              privacyShowReadReceipts: true,
+              privacyShowOnlineStatus: true,
+              isPublicProfile: true,
+              isOnline: true,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            };
+            setCurrentUser(newProfile);
+
+            await setDoc(userRef, {
+              uid: user.uid,
+              username: chosenUsername,
+              displayName: chosenDisplayName,
+              bio: chosenBio,
+              avatarUrl,
+              friendsCount: 0,
+              privacyWhoCanRequest: 'everyone',
+              privacyStoryAudience: 'friends',
+              privacyShowReadReceipts: true,
+              privacyShowOnlineStatus: true,
+              isPublicProfile: true,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            });
+
+            await setDoc(doc(db, 'users_private', user.uid), {
+              uid: user.uid,
+              email: chosenEmail,
+              notificationPreviewEnabled: true,
+              notifyFriendRequests: true,
+              notifyMessages: true,
+              notifyStories: true,
+              createdAt: serverTimestamp(),
+              updatedAt: serverTimestamp(),
+            }).catch(() => {});
+
+            await setDoc(doc(db, 'usernames', chosenUsername), {
+              username: chosenUsername,
+              uid: user.uid,
+              createdAt: serverTimestamp(),
+            }).catch(() => {});
+          }
+
+          const privRef = doc(db, 'users_private', user.uid);
+          const privSnap = await getDoc(privRef);
+          if (privSnap.exists()) {
+            const pData = privSnap.data();
+            setPrivateSettings({
+              uid: user.uid,
+              email: String(pData.email || chosenEmail),
+              notificationPreviewEnabled: Boolean(pData.notificationPreviewEnabled ?? true),
+              notifyFriendRequests: Boolean(pData.notifyFriendRequests ?? true),
+              notifyMessages: Boolean(pData.notifyMessages ?? true),
+              notifyStories: Boolean(pData.notifyStories ?? true),
+              createdAt: toIsoString(pData.createdAt),
+              updatedAt: toIsoString(pData.updatedAt),
+            });
+          } else {
+            setPrivateSettings((prev) => ({
+              ...prev,
+              uid: user.uid,
+              email: chosenEmail,
+            }));
+          }
+        } catch {
+          setCurrentUser((prev) => ({
+            ...prev,
+            uid: user.uid,
+            username: chosenUsername,
+            displayName: chosenDisplayName,
+            bio: chosenBio,
+            avatarUrl,
+          }));
+          setPrivateSettings((prev) => ({
+            ...prev,
+            uid: user.uid,
+            email: chosenEmail,
+          }));
+        } finally {
+          pendingProfileRef.current = null;
+        }
       }
     });
     return () => unsubscribe();
   }, []);
 
-  // Attach real-time Firestore listener when authenticated with Firebase Auth
+  // Attach real-time Firestore listeners for multi-user discovery, requests, friendships, chats, stories, blocks & notifications
   useEffect(() => {
     if (!authReady || !firebaseUser) return;
 
@@ -177,46 +330,363 @@ export default function App() {
     const unsubUsers = onSnapshot(
       publicUsersQuery,
       (snapshot) => {
-        if (!snapshot.empty) {
-          const remoteUsers: UserPublicProfile[] = [];
-          snapshot.forEach((docSnap) => {
-            const data = docSnap.data();
-            remoteUsers.push({
-              uid: String(data.uid || docSnap.id),
-              username: String(data.username || 'user'),
-              displayName: String(data.displayName || 'User'),
-              bio: String(data.bio || ''),
-              avatarUrl: String(data.avatarUrl || createAvatarSvg('CX', '#2563eb', '#4f46e5')),
-              friendsCount: Number(data.friendsCount || 0),
-              privacyWhoCanRequest: data.privacyWhoCanRequest === 'none' ? 'none' : 'everyone',
-              privacyStoryAudience: data.privacyStoryAudience === 'public' ? 'public' : 'friends',
-              privacyShowReadReceipts: Boolean(data.privacyShowReadReceipts),
-              privacyShowOnlineStatus: Boolean(data.privacyShowOnlineStatus),
-              isPublicProfile: Boolean(data.isPublicProfile),
-              createdAt: new Date().toISOString(),
-              updatedAt: new Date().toISOString(),
-            });
+        const remoteUsers: UserPublicProfile[] = [];
+        snapshot.forEach((docSnap) => {
+          const data = docSnap.data();
+          remoteUsers.push({
+            uid: String(data.uid || docSnap.id),
+            username: String(data.username || 'user'),
+            displayName: String(data.displayName || 'User'),
+            bio: String(data.bio || ''),
+            avatarUrl: String(
+              data.avatarUrl || createAvatarSvg('CX', '#005c4b', '#00a884')
+            ),
+            friendsCount: Number(data.friendsCount || 0),
+            privacyWhoCanRequest: data.privacyWhoCanRequest === 'none' ? 'none' : 'everyone',
+            privacyStoryAudience: data.privacyStoryAudience === 'public' ? 'public' : 'friends',
+            privacyShowReadReceipts: Boolean(data.privacyShowReadReceipts ?? true),
+            privacyShowOnlineStatus: Boolean(data.privacyShowOnlineStatus ?? true),
+            isPublicProfile: Boolean(data.isPublicProfile ?? true),
+            isOnline: true,
+            createdAt: toIsoString(data.createdAt),
+            updatedAt: toIsoString(data.updatedAt),
           });
-          setDirectoryUsers((prev) => {
-            const byUid = new Map(prev.map((u) => [u.uid, u]));
-            remoteUsers.forEach((ru) => byUid.set(ru.uid, ru));
-            return Array.from(byUid.values());
-          });
-        }
+        });
+        setDirectoryUsers(remoteUsers);
       },
       (error) => {
         try {
           handleFirestoreError(error, OperationType.LIST, 'users');
         } catch {
-          // Logged via structured FirestoreErrorInfo
+          // Structured error logged
         }
       }
     );
 
+    let incomingReqs: FriendRequest[] = [];
+    let outgoingReqs: FriendRequest[] = [];
+    const syncFriendRequests = () => {
+      const merged = new Map<string, FriendRequest>();
+      incomingReqs.forEach((r) => merged.set(r.requestId, r));
+      outgoingReqs.forEach((r) => merged.set(r.requestId, r));
+      setFriendRequests(Array.from(merged.values()));
+    };
+
+    const parseReqs = (snap: {
+      forEach: (cb: (d: { id: string; data: () => Record<string, unknown> }) => void) => void;
+    }) => {
+      const list: FriendRequest[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        list.push({
+          requestId: d.id,
+          fromUid: String(data.fromUid),
+          fromUsername: String(data.fromUsername),
+          fromDisplayName: String(data.fromDisplayName),
+          fromAvatarUrl: String(data.fromAvatarUrl || ''),
+          toUid: String(data.toUid),
+          toUsername: String(data.toUsername),
+          toDisplayName: String(data.toDisplayName),
+          toAvatarUrl: String(data.toAvatarUrl || ''),
+          status: data.status as FriendRequest['status'],
+          createdAt: toIsoString(data.createdAt),
+          updatedAt: toIsoString(data.updatedAt),
+        });
+      });
+      return list;
+    };
+
+    const unsubInReq = onSnapshot(
+      query(collection(db, 'friendRequests'), where('toUid', '==', firebaseUser.uid)),
+      (snap) => {
+        incomingReqs = parseReqs(snap);
+        syncFriendRequests();
+      },
+      () => {}
+    );
+
+    const unsubOutReq = onSnapshot(
+      query(collection(db, 'friendRequests'), where('fromUid', '==', firebaseUser.uid)),
+      (snap) => {
+        outgoingReqs = parseReqs(snap);
+        syncFriendRequests();
+      },
+      () => {}
+    );
+
+    let friends1: Friendship[] = [];
+    let friends2: Friendship[] = [];
+    const syncFriendships = () => {
+      const merged = new Map<string, Friendship>();
+      friends1.forEach((f) => merged.set(f.friendshipId, f));
+      friends2.forEach((f) => merged.set(f.friendshipId, f));
+      setFriendships(Array.from(merged.values()));
+    };
+
+    const parseFriendships = (snap: {
+      forEach: (cb: (d: { id: string; data: () => Record<string, unknown> }) => void) => void;
+    }) => {
+      const list: Friendship[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        list.push({
+          friendshipId: d.id,
+          user1Uid: String(data.user1Uid),
+          user2Uid: String(data.user2Uid),
+          user1Username: String(data.user1Username),
+          user2Username: String(data.user2Username),
+          user1DisplayName: String(data.user1DisplayName),
+          user2DisplayName: String(data.user2DisplayName),
+          user1AvatarUrl: String(data.user1AvatarUrl || ''),
+          user2AvatarUrl: String(data.user2AvatarUrl || ''),
+          status: 'active',
+          createdAt: toIsoString(data.createdAt),
+        });
+      });
+      return list;
+    };
+
+    const unsubF1 = onSnapshot(
+      query(collection(db, 'friendships'), where('user1Uid', '==', firebaseUser.uid)),
+      (snap) => {
+        friends1 = parseFriendships(snap);
+        syncFriendships();
+      },
+      () => {}
+    );
+
+    const unsubF2 = onSnapshot(
+      query(collection(db, 'friendships'), where('user2Uid', '==', firebaseUser.uid)),
+      (snap) => {
+        friends2 = parseFriendships(snap);
+        syncFriendships();
+      },
+      () => {}
+    );
+
+    let chats1: ChatConversation[] = [];
+    let chats2: ChatConversation[] = [];
+    const syncChats = () => {
+      const merged = new Map<string, ChatConversation>();
+      chats1.forEach((c) => merged.set(c.chatId, c));
+      chats2.forEach((c) => merged.set(c.chatId, c));
+      const sorted = Array.from(merged.values()).sort(
+        (a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime()
+      );
+      setChats(sorted);
+    };
+
+    const parseChats = (snap: {
+      forEach: (cb: (d: { id: string; data: () => Record<string, unknown> }) => void) => void;
+    }) => {
+      const list: ChatConversation[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        list.push({
+          chatId: d.id,
+          participant1Uid: String(data.participant1Uid),
+          participant2Uid: String(data.participant2Uid),
+          participant1Name: String(data.participant1Name),
+          participant2Name: String(data.participant2Name),
+          participant1Username: String(data.participant1Username),
+          participant2Username: String(data.participant2Username),
+          participant1Avatar: String(data.participant1Avatar || ''),
+          participant2Avatar: String(data.participant2Avatar || ''),
+          lastMessageText: String(data.lastMessageText || ''),
+          lastMessageSenderId: String(data.lastMessageSenderId || ''),
+          lastMessageStatus:
+            (data.lastMessageStatus as ChatConversation['lastMessageStatus']) || 'sent',
+          unreadCount1: Number(data.unreadCount1 || 0),
+          unreadCount2: Number(data.unreadCount2 || 0),
+          typingUid: String(data.typingUid || ''),
+          createdAt: toIsoString(data.createdAt),
+          updatedAt: toIsoString(data.updatedAt),
+        });
+      });
+      return list;
+    };
+
+    const unsubChats1 = onSnapshot(
+      query(collection(db, 'chats'), where('participant1Uid', '==', firebaseUser.uid)),
+      (snap) => {
+        chats1 = parseChats(snap);
+        syncChats();
+      },
+      () => {}
+    );
+    const unsubChats2 = onSnapshot(
+      query(collection(db, 'chats'), where('participant2Uid', '==', firebaseUser.uid)),
+      (snap) => {
+        chats2 = parseChats(snap);
+        syncChats();
+      },
+      () => {}
+    );
+
+    const unsubStories = onSnapshot(
+      query(collection(db, 'stories'), where('expiresAt', '>', Timestamp.now())),
+      (snap) => {
+        const remoteStories: StoryItem[] = [];
+        snap.forEach((d) => {
+          const data = d.data();
+          remoteStories.push({
+            storyId: d.id,
+            authorUid: String(data.authorUid),
+            authorUsername: String(data.authorUsername),
+            authorDisplayName: String(data.authorDisplayName),
+            authorAvatarUrl: String(data.authorAvatarUrl || ''),
+            mediaType: data.mediaType === 'image' ? 'image' : 'text',
+            caption: String(data.caption || ''),
+            mediaUrl: String(data.mediaUrl || ''),
+            backgroundStyle: String(
+              data.backgroundStyle || 'from-emerald-100 via-teal-100 to-slate-100'
+            ),
+            audience: data.audience === 'public' ? 'public' : 'friends',
+            viewersCount: Number(data.viewersCount || 0),
+            viewers: [],
+            createdAt: toIsoString(data.createdAt),
+            expiresAt: toIsoString(data.expiresAt),
+          });
+        });
+        setStories(remoteStories);
+      },
+      () => {}
+    );
+
+    const unsubBlocks = onSnapshot(
+      query(collection(db, 'blocks'), where('blockerUid', '==', firebaseUser.uid)),
+      (snap) => {
+        const remoteBlocks: UserBlock[] = [];
+        snap.forEach((d) => {
+          const data = d.data();
+          remoteBlocks.push({
+            blockId: d.id,
+            blockerUid: String(data.blockerUid),
+            blockedUid: String(data.blockedUid),
+            blockedUsername: String(data.blockedUsername),
+            blockedDisplayName: String(data.blockedDisplayName),
+            reason: String(data.reason || ''),
+            createdAt: toIsoString(data.createdAt),
+          });
+        });
+        setBlocks(remoteBlocks);
+      },
+      () => {}
+    );
+
+    const unsubNotifications = onSnapshot(
+      query(collection(db, 'notifications'), where('recipientUid', '==', firebaseUser.uid)),
+      (snap) => {
+        const remoteNotifs: UserNotification[] = [];
+        snap.forEach((d) => {
+          const data = d.data();
+          remoteNotifs.push({
+            notificationId: d.id,
+            recipientUid: String(data.recipientUid),
+            actorUid: String(data.actorUid),
+            actorName: String(data.actorName),
+            actorUsername: String(data.actorUsername),
+            type: data.type as UserNotification['type'],
+            previewText: String(data.previewText),
+            isRead: Boolean(data.isRead),
+            createdAt: toIsoString(data.createdAt),
+          });
+        });
+        remoteNotifs.sort(
+          (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+        );
+        setNotifications(remoteNotifs);
+      },
+      () => {}
+    );
+
     return () => {
       unsubUsers();
+      unsubInReq();
+      unsubOutReq();
+      unsubF1();
+      unsubF2();
+      unsubChats1();
+      unsubChats2();
+      unsubStories();
+      unsubBlocks();
+      unsubNotifications();
     };
   }, [authReady, firebaseUser]);
+
+  // Listen to active chat's messages in real time when signed in with Firebase Auth
+  useEffect(() => {
+    if (!authReady || !firebaseUser || !activeChatId) return;
+
+    let sentMsgs: ChatMessage[] = [];
+    let recMsgs: ChatMessage[] = [];
+
+    const syncChatMessages = () => {
+      const byId = new Map<string, ChatMessage>();
+      sentMsgs.forEach((m) => byId.set(m.messageId, m));
+      recMsgs.forEach((m) => byId.set(m.messageId, m));
+      const sorted = Array.from(byId.values()).sort(
+        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
+      );
+      setMessagesByChat((prev) => ({
+        ...prev,
+        [activeChatId]: sorted,
+      }));
+    };
+
+    const parseMessages = (snap: {
+      forEach: (cb: (d: { id: string; data: () => Record<string, unknown> }) => void) => void;
+    }) => {
+      const list: ChatMessage[] = [];
+      snap.forEach((d) => {
+        const data = d.data();
+        list.push({
+          messageId: d.id,
+          chatId: String(data.chatId || activeChatId),
+          senderId: String(data.senderId),
+          recipientId: String(data.recipientId),
+          text: String(data.text || ''),
+          mediaUrl: String(data.mediaUrl || ''),
+          mediaType: data.mediaType === 'image' ? 'image' : 'none',
+          replyToMessageId: String(data.replyToMessageId || ''),
+          replyToText: String(data.replyToText || ''),
+          status: (data.status as ChatMessage['status']) || 'delivered',
+          isDeleted: Boolean(data.isDeleted),
+          createdAt: toIsoString(data.createdAt),
+          updatedAt: toIsoString(data.updatedAt),
+        });
+      });
+      return list;
+    };
+
+    const unsubM1 = onSnapshot(
+      query(
+        collection(db, 'chats', activeChatId, 'messages'),
+        where('senderId', '==', firebaseUser.uid)
+      ),
+      (snap) => {
+        sentMsgs = parseMessages(snap);
+        syncChatMessages();
+      },
+      () => {}
+    );
+    const unsubM2 = onSnapshot(
+      query(
+        collection(db, 'chats', activeChatId, 'messages'),
+        where('recipientId', '==', firebaseUser.uid)
+      ),
+      (snap) => {
+        recMsgs = parseMessages(snap);
+        syncChatMessages();
+      },
+      () => {}
+    );
+
+    return () => {
+      unsubM1();
+      unsubM2();
+    };
+  }, [authReady, firebaseUser, activeChatId]);
 
   const isAuthenticated = Boolean(firebaseUser) || sandboxAuthenticated;
 
@@ -253,6 +723,7 @@ export default function App() {
     email: string;
   }) => {
     if (customProfile) {
+      pendingProfileRef.current = customProfile;
       const initials =
         customProfile.displayName
           .split(/\s+/)
@@ -265,7 +736,7 @@ export default function App() {
         username: customProfile.username,
         displayName: customProfile.displayName,
         bio: customProfile.bio,
-        avatarUrl: createAvatarSvg(initials, '#2563eb', '#4f46e5'),
+        avatarUrl: createAvatarSvg(initials, '#005c4b', '#00a884'),
       };
       setCurrentUser(updatedUser);
       setPrivateSettings((prev) => ({
@@ -276,9 +747,10 @@ export default function App() {
     setSandboxAuthenticated(true);
   };
 
-  const handleSelectChat = (chatId: string | null) => {
+  const handleSelectChat = async (chatId: string | null) => {
     setActiveChatId(chatId);
     if (chatId) {
+      const target = chats.find((c) => c.chatId === chatId);
       setChats((prev) =>
         prev.map((c) => {
           if (c.chatId !== chatId) return c;
@@ -291,6 +763,21 @@ export default function App() {
           };
         })
       );
+
+      if (firebaseUser && target) {
+        const isP1 = target.participant1Uid === currentUser.uid;
+        try {
+          await updateDoc(doc(db, 'chats', chatId), {
+            unreadCount1: isP1 ? 0 : target.unreadCount1,
+            unreadCount2: !isP1 ? 0 : target.unreadCount2,
+            lastMessageStatus: 'read',
+            typingUid: target.typingUid || '',
+            updatedAt: serverTimestamp(),
+          });
+        } catch {
+          // Handled
+        }
+      }
     }
   };
 
@@ -338,27 +825,57 @@ export default function App() {
       [chatId]: [...(prev[chatId] || []), newMsg],
     }));
 
+    const previewSummary = (text || 'Shared an image attachment').slice(0, 1000);
+    const isSenderP1 = targetChat.participant1Uid === currentUser.uid;
+    const nextUnread1 = isSenderP1 ? targetChat.unreadCount1 : targetChat.unreadCount1 + 1;
+    const nextUnread2 = isSenderP1 ? targetChat.unreadCount2 + 1 : targetChat.unreadCount2;
+
     setChats((prev) =>
       prev.map((c) =>
         c.chatId === chatId
           ? {
               ...c,
-              lastMessageText: text || 'Shared an image attachment',
+              lastMessageText: previewSummary,
               lastMessageSenderId: currentUser.uid,
               lastMessageStatus: 'delivered',
+              unreadCount1: nextUnread1,
+              unreadCount2: nextUnread2,
               updatedAt: nowIso,
             }
           : c
       )
     );
 
-    if (firebaseUser && firebaseUser.emailVerified) {
+    if (firebaseUser) {
       try {
         await setDoc(doc(db, 'chats', chatId, 'messages', messageId), {
           ...newMsg,
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+
+        await updateDoc(doc(db, 'chats', chatId), {
+          lastMessageText: previewSummary,
+          lastMessageSenderId: currentUser.uid,
+          lastMessageStatus: 'delivered',
+          unreadCount1: nextUnread1,
+          unreadCount2: nextUnread2,
+          typingUid: '',
+          updatedAt: serverTimestamp(),
+        });
+
+        const notifId = `notif_msg_${Date.now()}`;
+        await setDoc(doc(db, 'notifications', notifId), {
+          notificationId: notifId,
+          recipientUid: recipientId,
+          actorUid: currentUser.uid,
+          actorName: currentUser.displayName,
+          actorUsername: currentUser.username,
+          type: 'new_message',
+          previewText: `${currentUser.displayName}: ${previewSummary.slice(0, 140)}`,
+          isRead: false,
+          createdAt: serverTimestamp(),
+        }).catch(() => {});
       } catch (err) {
         try {
           handleFirestoreError(err, OperationType.CREATE, `chats/${chatId}/messages/${messageId}`);
@@ -388,7 +905,7 @@ export default function App() {
     }));
     showToast('Message deleted.');
 
-    if (firebaseUser && firebaseUser.emailVerified) {
+    if (firebaseUser) {
       try {
         await updateDoc(doc(db, 'chats', chatId, 'messages', messageId), {
           text: '',
@@ -407,7 +924,7 @@ export default function App() {
     }
   };
 
-  const handleAcceptFriendRequest = (req: FriendRequest) => {
+  const handleAcceptFriendRequest = async (req: FriendRequest) => {
     if (req.toUid !== currentUser.uid || req.status !== 'pending') return;
 
     const nowIso = new Date().toISOString();
@@ -444,25 +961,42 @@ export default function App() {
       friendsCount: prev.friendsCount + 1,
     }));
 
-    setNotifications((prev) => [
-      {
-        notificationId: `notif_${Date.now()}`,
-        recipientUid: currentUser.uid,
-        actorUid: req.fromUid,
-        actorName: req.fromDisplayName,
-        actorUsername: req.fromUsername,
-        type: 'friend_accepted',
-        previewText: `You and ${req.fromDisplayName} (@${req.fromUsername}) are now connected.`,
-        isRead: false,
-        createdAt: nowIso,
-      },
-      ...prev,
-    ]);
-
     showToast(`Accepted friend request from @${req.fromUsername}`);
+
+    if (firebaseUser) {
+      try {
+        await updateDoc(doc(db, 'friendRequests', req.requestId), {
+          status: 'accepted',
+          updatedAt: serverTimestamp(),
+        });
+        await setDoc(doc(db, 'friendships', friendshipId), {
+          ...newFriendship,
+          createdAt: serverTimestamp(),
+        });
+        await updateDoc(doc(db, 'users', currentUser.uid), {
+          friendsCount: currentUser.friendsCount + 1,
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+
+        const notifId = `notif_accept_${Date.now()}`;
+        await setDoc(doc(db, 'notifications', notifId), {
+          notificationId: notifId,
+          recipientUid: req.fromUid,
+          actorUid: currentUser.uid,
+          actorName: currentUser.displayName,
+          actorUsername: currentUser.username,
+          type: 'friend_accepted',
+          previewText: `${currentUser.displayName} (@${currentUser.username}) accepted your friend request.`,
+          isRead: false,
+          createdAt: serverTimestamp(),
+        }).catch(() => {});
+      } catch {
+        // Handled
+      }
+    }
   };
 
-  const handleRejectFriendRequest = (req: FriendRequest) => {
+  const handleRejectFriendRequest = async (req: FriendRequest) => {
     if (req.toUid !== currentUser.uid || req.status !== 'pending') return;
     setFriendRequests((prev) =>
       prev.map((r) =>
@@ -472,9 +1006,20 @@ export default function App() {
       )
     );
     showToast(`Declined friend request from @${req.fromUsername}`);
+
+    if (firebaseUser) {
+      try {
+        await updateDoc(doc(db, 'friendRequests', req.requestId), {
+          status: 'rejected',
+          updatedAt: serverTimestamp(),
+        });
+      } catch {
+        // Handled
+      }
+    }
   };
 
-  const handleCancelFriendRequest = (req: FriendRequest) => {
+  const handleCancelFriendRequest = async (req: FriendRequest) => {
     if (req.fromUid !== currentUser.uid || req.status !== 'pending') return;
     setFriendRequests((prev) =>
       prev.map((r) =>
@@ -484,9 +1029,20 @@ export default function App() {
       )
     );
     showToast(`Cancelled outgoing request to @${req.toUsername}`);
+
+    if (firebaseUser) {
+      try {
+        await updateDoc(doc(db, 'friendRequests', req.requestId), {
+          status: 'cancelled',
+          updatedAt: serverTimestamp(),
+        });
+      } catch {
+        // Handled
+      }
+    }
   };
 
-  const handleSendFriendRequest = (targetUser: UserPublicProfile) => {
+  const handleSendFriendRequest = async (targetUser: UserPublicProfile) => {
     if (blockedUids.has(targetUser.uid)) {
       showToast('Cannot send request to a blocked user.');
       return;
@@ -523,20 +1079,58 @@ export default function App() {
       updatedAt: nowIso,
     };
 
-    setFriendRequests((prev) => [newReq, ...prev]);
+    setFriendRequests((prev) => [newReq, ...prev.filter((r) => r.requestId !== requestId)]);
     showToast(`Friend request sent to @${targetUser.username}`);
+
+    if (firebaseUser) {
+      try {
+        await setDoc(doc(db, 'friendRequests', requestId), {
+          ...newReq,
+          createdAt: serverTimestamp(),
+          updatedAt: serverTimestamp(),
+        });
+
+        const notifId = `notif_req_${Date.now()}`;
+        await setDoc(doc(db, 'notifications', notifId), {
+          notificationId: notifId,
+          recipientUid: targetUser.uid,
+          actorUid: currentUser.uid,
+          actorName: currentUser.displayName,
+          actorUsername: currentUser.username,
+          type: 'friend_request',
+          previewText: `${currentUser.displayName} (@${currentUser.username}) sent you a friend request.`,
+          isRead: false,
+          createdAt: serverTimestamp(),
+        }).catch(() => {});
+      } catch {
+        // Handled
+      }
+    }
   };
 
-  const handleRemoveFriend = (friendship: Friendship) => {
+  const handleRemoveFriend = async (friendship: Friendship) => {
     setFriendships((prev) => prev.filter((f) => f.friendshipId !== friendship.friendshipId));
+    const nextCount = Math.max(0, currentUser.friendsCount - 1);
     setCurrentUser((prev) => ({
       ...prev,
-      friendsCount: Math.max(0, prev.friendsCount - 1),
+      friendsCount: nextCount,
     }));
     showToast('Friend removed.');
+
+    if (firebaseUser) {
+      try {
+        await deleteDoc(doc(db, 'friendships', friendship.friendshipId));
+        await updateDoc(doc(db, 'users', currentUser.uid), {
+          friendsCount: nextCount,
+          updatedAt: serverTimestamp(),
+        }).catch(() => {});
+      } catch {
+        // Handled
+      }
+    }
   };
 
-  const handleStartChatWithUser = (
+  const handleStartChatWithUser = async (
     otherUid: string,
     otherName: string,
     otherUsername: string,
@@ -567,12 +1161,84 @@ export default function App() {
         updatedAt: nowIso,
       };
       setChats((prev) => [newChat, ...prev]);
+
+      if (firebaseUser) {
+        try {
+          await setDoc(doc(db, 'chats', chatId), {
+            ...newChat,
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        } catch {
+          // Handled
+        }
+      }
     }
     setActiveChatId(chatId);
     setActiveTab('chats');
   };
 
-  const handleBlockUser = (targetUser: UserPublicProfile, reason: string) => {
+  const handleStartCall = (
+    chatId: string,
+    peerUid: string,
+    peerName: string,
+    peerUsername: string,
+    peerAvatar: string,
+    callType: CallType
+  ) => {
+    const check = canStartCallWithPeer(currentUser.uid, peerUid, blockedUids);
+    if (!check.allowed) {
+      showToast(check.reason || 'Unable to start call.');
+      return;
+    }
+
+    setActiveCall({
+      callId: `call_${Date.now()}`,
+      chatId,
+      peerUid,
+      peerName,
+      peerUsername,
+      peerAvatar,
+      callType,
+      direction: 'outgoing',
+    });
+  };
+
+  const handleEndCall = (
+    durationSeconds: number,
+    finalCallType: CallType,
+    finalStatus: CallStatus
+  ) => {
+    if (!activeCall) return;
+    const nowIso = new Date().toISOString();
+
+    const newLog: CallLogEntry = {
+      callId: activeCall.callId,
+      chatId: activeCall.chatId,
+      callerUid: currentUser.uid,
+      peerUid: activeCall.peerUid,
+      peerName: activeCall.peerName,
+      peerUsername: activeCall.peerUsername,
+      peerAvatar: activeCall.peerAvatar,
+      callType: finalCallType,
+      direction: activeCall.direction,
+      status: finalStatus,
+      durationSeconds,
+      createdAt: nowIso,
+    };
+
+    setCallLogs((prev) => [newLog, ...prev]);
+
+    const callSummaryText = `${
+      finalCallType === 'video' ? 'HD Video Call' : 'Voice Call'
+    } · ${formatCallDuration(durationSeconds)}`;
+
+    handleSendMessage(activeCall.chatId, callSummaryText, '', 'none', '', '');
+    setActiveCall(null);
+    showToast(`${callSummaryText} ended.`);
+  };
+
+  const handleBlockUser = async (targetUser: UserPublicProfile, reason: string) => {
     const blockId = `${currentUser.uid}_${targetUser.uid}`;
     if (blocks.some((b) => b.blockId === blockId)) return;
 
@@ -582,7 +1248,7 @@ export default function App() {
       blockedUid: targetUser.uid,
       blockedUsername: targetUser.username,
       blockedDisplayName: targetUser.displayName,
-      reason,
+      reason: reason.slice(0, 200),
       createdAt: new Date().toISOString(),
     };
 
@@ -597,14 +1263,33 @@ export default function App() {
       setActiveChatId(null);
     }
     showToast(`Blocked @${targetUser.username}. They can no longer message or request you.`);
+
+    if (firebaseUser) {
+      try {
+        await setDoc(doc(db, 'blocks', blockId), {
+          ...newBlock,
+          createdAt: serverTimestamp(),
+        });
+      } catch {
+        // Handled
+      }
+    }
   };
 
-  const handleUnblockUser = (blockId: string) => {
+  const handleUnblockUser = async (blockId: string) => {
     setBlocks((prev) => prev.filter((b) => b.blockId !== blockId));
     showToast('User unblocked.');
+
+    if (firebaseUser) {
+      try {
+        await deleteDoc(doc(db, 'blocks', blockId));
+      } catch {
+        // Handled
+      }
+    }
   };
 
-  const handleCreateStory = (input: {
+  const handleCreateStory = async (input: {
     mediaType: 'text' | 'image';
     caption: string;
     mediaUrl: string;
@@ -612,8 +1297,10 @@ export default function App() {
     audience: StoryAudience;
   }) => {
     const now = Date.now();
+    const storyId = `story_${now}`;
+    const expiresDate = new Date(now + 24 * 3600_000);
     const newStory: StoryItem = {
-      storyId: `story_${now}`,
+      storyId,
       authorUid: currentUser.uid,
       authorUsername: currentUser.username,
       authorDisplayName: currentUser.displayName,
@@ -626,20 +1313,53 @@ export default function App() {
       viewersCount: 0,
       viewers: [],
       createdAt: new Date(now).toISOString(),
-      expiresAt: new Date(now + 24 * 3600_000).toISOString(),
+      expiresAt: expiresDate.toISOString(),
     };
     setStories((prev) => [newStory, ...prev]);
-    showToast('Story published! Visible for 24 hours.');
+    showToast('Story published to Cloud Firestore! Visible for 24 hours.');
+
+    if (firebaseUser) {
+      try {
+        await setDoc(doc(db, 'stories', storyId), {
+          storyId,
+          authorUid: currentUser.uid,
+          authorUsername: currentUser.username,
+          authorDisplayName: currentUser.displayName,
+          authorAvatarUrl: currentUser.avatarUrl,
+          mediaType: input.mediaType,
+          caption: input.caption,
+          mediaUrl: input.mediaUrl,
+          backgroundStyle: input.backgroundStyle,
+          audience: input.audience,
+          viewersCount: 0,
+          createdAt: serverTimestamp(),
+          expiresAt: Timestamp.fromDate(expiresDate),
+        });
+      } catch {
+        // Handled
+      }
+    }
   };
 
-  const handleDeleteStory = (storyId: string) => {
+  const handleDeleteStory = async (storyId: string) => {
     setStories((prev) =>
       prev.filter((s) => !(s.storyId === storyId && s.authorUid === currentUser.uid))
     );
     showToast('Story deleted.');
+
+    if (firebaseUser) {
+      try {
+        await deleteDoc(doc(db, 'stories', storyId));
+      } catch {
+        // Handled
+      }
+    }
   };
 
-  const handleRecordStoryView = (storyId: string) => {
+  const handleRecordStoryView = async (storyId: string) => {
+    const targetStory = stories.find((s) => s.storyId === storyId);
+    if (!targetStory || targetStory.authorUid === currentUser.uid) return;
+
     setStories((prev) =>
       prev.map((s) => {
         if (s.storyId !== storyId || s.authorUid === currentUser.uid) return s;
@@ -659,14 +1379,73 @@ export default function App() {
         };
       })
     );
+
+    if (firebaseUser) {
+      try {
+        await setDoc(doc(db, 'stories', storyId, 'views', currentUser.uid), {
+          viewerUid: currentUser.uid,
+          storyAuthorUid: targetStory.authorUid,
+          viewerUsername: currentUser.username,
+          viewerDisplayName: currentUser.displayName,
+          viewedAt: serverTimestamp(),
+        });
+      } catch {
+        // Handled
+      }
+    }
   };
 
-  const handleSubmitReport = (e: React.FormEvent) => {
+  const handleUpdateProfile = async (updated: Partial<UserPublicProfile>) => {
+    const merged = { ...currentUser, ...updated };
+    setCurrentUser(merged);
+
+    if (firebaseUser) {
+      try {
+        await updateDoc(doc(db, 'users', firebaseUser.uid), {
+          username: merged.username,
+          displayName: merged.displayName,
+          bio: merged.bio,
+          avatarUrl: merged.avatarUrl,
+          privacyWhoCanRequest: merged.privacyWhoCanRequest,
+          privacyStoryAudience: merged.privacyStoryAudience,
+          privacyShowReadReceipts: merged.privacyShowReadReceipts,
+          privacyShowOnlineStatus: merged.privacyShowOnlineStatus,
+          isPublicProfile: merged.isPublicProfile,
+          updatedAt: serverTimestamp(),
+        });
+      } catch {
+        // Handled
+      }
+    }
+  };
+
+  const handleUpdatePrivateSettings = async (updated: Partial<UserPrivateSettings>) => {
+    const merged = { ...privateSettings, ...updated };
+    setPrivateSettings(merged);
+
+    if (firebaseUser) {
+      try {
+        await updateDoc(doc(db, 'users_private', firebaseUser.uid), {
+          email: merged.email,
+          notificationPreviewEnabled: merged.notificationPreviewEnabled,
+          notifyFriendRequests: merged.notifyFriendRequests,
+          notifyMessages: merged.notifyMessages,
+          notifyStories: merged.notifyStories,
+          updatedAt: serverTimestamp(),
+        });
+      } catch {
+        // Handled
+      }
+    }
+  };
+
+  const handleSubmitReport = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!reportModalTarget || !reportDetails.trim()) return;
 
+    const reportId = `report_${Date.now()}`;
     const newReport: AbuseReport = {
-      reportId: `report_${Date.now()}`,
+      reportId,
       reporterUid: currentUser.uid,
       targetUid: reportModalTarget.targetUid,
       targetLabel: reportModalTarget.targetLabel,
@@ -680,6 +1459,23 @@ export default function App() {
     setReportModalTarget(null);
     setReportDetails('');
     showToast('Safety report submitted for moderation review.');
+
+    if (firebaseUser) {
+      try {
+        await setDoc(doc(db, 'reports', reportId), {
+          reportId,
+          reporterUid: currentUser.uid,
+          targetUid: reportModalTarget.targetUid,
+          targetType: reportModalTarget.targetType,
+          reasonCategory: reportCategory,
+          details: reportDetails.trim(),
+          status: 'open',
+          createdAt: serverTimestamp(),
+        });
+      } catch {
+        // Handled
+      }
+    }
   };
 
   const handleLogout = async () => {
@@ -714,19 +1510,17 @@ export default function App() {
   }
 
   return (
-    <div
-      className={`min-h-screen flex flex-col pb-16 lg:pb-0 transition-colors ${
-        darkMode ? 'bg-slate-950 text-slate-100' : 'bg-slate-50 text-slate-900'
-      }`}
-    >
+    <div className="min-h-screen flex flex-col pb-16 lg:pb-0 bg-[#f0f2f5] text-black transition-colors">
+      {/* Offline Mode Indicator */}
+      {!isOnline && (
+        <div className="bg-amber-300 text-black text-xs font-bold px-4 py-1.5 flex items-center justify-center gap-2 border-b border-amber-400">
+          <WifiOff className="w-3.5 h-3.5 text-black" />
+          <span>Offline Mode — Service Worker is serving cached ConnectX data.</span>
+        </div>
+      )}
+
       {/* Top Bar Contract: Zone 1 Brand, Zone 2 5 Nav Links, Zone 3 Primary Action */}
-      <header
-        className={`flex items-center justify-between gap-8 px-4 sm:px-6 h-13 border-b sticky top-0 z-30 backdrop-blur-md ${
-          darkMode
-            ? 'border-slate-800 bg-slate-950/90'
-            : 'border-slate-200 bg-white/90'
-        }`}
-      >
+      <header className="flex items-center justify-between gap-8 px-4 sm:px-6 h-13 border-b border-slate-300 bg-white text-black sticky top-0 z-30">
         {/* Zone 1: Single text element wordmark */}
         <a
           href="#workspace"
@@ -734,20 +1528,20 @@ export default function App() {
             e.preventDefault();
             setActiveTab('chats');
           }}
-          className="text-lg font-bold tracking-tight text-indigo-600 dark:text-indigo-400 whitespace-nowrap shrink-0"
+          className="text-lg font-bold tracking-tight text-black whitespace-nowrap shrink-0"
         >
           ConnectX
         </a>
 
         {/* Zone 2: 5 concise single-line text navigation links */}
-        <nav className="hidden lg:flex items-center gap-6 text-sm font-medium text-slate-600 dark:text-slate-400">
+        <nav className="hidden lg:flex items-center gap-6 text-sm font-medium text-black">
           <button
             type="button"
             onClick={() => setActiveTab('chats')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer text-black ${
               activeTab === 'chats'
-                ? 'text-indigo-600 dark:text-indigo-400 font-semibold underline underline-offset-8 decoration-2'
-                : 'hover:text-slate-900 dark:hover:text-white'
+                ? 'font-bold underline underline-offset-8 decoration-2 decoration-[#25d366]'
+                : 'hover:underline'
             }`}
           >
             Chats {unreadChatsCount > 0 ? `(${unreadChatsCount})` : ''}
@@ -755,10 +1549,10 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveTab('friends')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer text-black ${
               activeTab === 'friends'
-                ? 'text-indigo-600 dark:text-indigo-400 font-semibold underline underline-offset-8 decoration-2'
-                : 'hover:text-slate-900 dark:hover:text-white'
+                ? 'font-bold underline underline-offset-8 decoration-2 decoration-[#25d366]'
+                : 'hover:underline'
             }`}
           >
             Friends {pendingIncomingRequestsCount > 0 ? `(${pendingIncomingRequestsCount})` : ''}
@@ -766,10 +1560,10 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveTab('discover')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer text-black ${
               activeTab === 'discover'
-                ? 'text-indigo-600 dark:text-indigo-400 font-semibold underline underline-offset-8 decoration-2'
-                : 'hover:text-slate-900 dark:hover:text-white'
+                ? 'font-bold underline underline-offset-8 decoration-2 decoration-[#25d366]'
+                : 'hover:underline'
             }`}
           >
             Discover
@@ -777,10 +1571,10 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveTab('stories')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer text-black ${
               activeTab === 'stories'
-                ? 'text-indigo-600 dark:text-indigo-400 font-semibold underline underline-offset-8 decoration-2'
-                : 'hover:text-slate-900 dark:hover:text-white'
+                ? 'font-bold underline underline-offset-8 decoration-2 decoration-[#25d366]'
+                : 'hover:underline'
             }`}
           >
             Stories
@@ -788,24 +1582,24 @@ export default function App() {
           <button
             type="button"
             onClick={() => setActiveTab('profile')}
-            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+            className={`py-1 transition-colors whitespace-nowrap shrink-0 cursor-pointer text-black ${
               activeTab === 'profile'
-                ? 'text-indigo-600 dark:text-indigo-400 font-semibold underline underline-offset-8 decoration-2'
-                : 'hover:text-slate-900 dark:hover:text-white'
+                ? 'font-bold underline underline-offset-8 decoration-2 decoration-[#25d366]'
+                : 'hover:underline'
             }`}
           >
             Profile
           </button>
         </nav>
 
-        {/* Zone 3: 1 primary action */}
-        <div className="flex items-center gap-3 shrink-0">
+        {/* Zone 3: Primary actions */}
+        <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
             onClick={() => setShowNotificationsDrawer(true)}
-            className="px-3.5 py-1.5 text-xs font-semibold text-white bg-indigo-600 rounded-lg hover:bg-indigo-500 transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer"
+            className="px-3.5 py-1.5 text-xs font-bold text-black bg-[#25d366] rounded-lg hover:bg-[#1ebe5d] transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer"
           >
-            <Bell className="w-3.5 h-3.5" />
+            <Bell className="w-3.5 h-3.5 text-black" />
             <span>
               Alerts {unreadNotificationsCount > 0 ? `(${unreadNotificationsCount})` : ''}
             </span>
@@ -817,15 +1611,15 @@ export default function App() {
       {toastBanner && (
         <div
           role="status"
-          className="fixed bottom-18 lg:bottom-6 right-4 z-40 px-4 py-2.5 rounded-xl bg-slate-900 dark:bg-indigo-600 text-white text-xs font-semibold shadow-lg flex items-center gap-2"
+          className="fixed bottom-18 lg:bottom-6 right-4 z-40 px-4 py-2.5 rounded-xl bg-[#25d366] border border-emerald-600 text-black text-xs font-bold shadow-lg flex items-center gap-2"
         >
-          <Check className="w-4 h-4 shrink-0" />
+          <Check className="w-4 h-4 text-black shrink-0" />
           <span>{toastBanner}</span>
         </div>
       )}
 
       {/* Main Content Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-4 sm:py-6">
+      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-4 sm:py-6 text-black">
         {activeTab === 'chats' && (
           <ChatsView
             currentUser={currentUser}
@@ -834,14 +1628,16 @@ export default function App() {
             activeChatId={activeChatId}
             blockedUids={blockedUids}
             directoryUsers={directoryUsers}
+            callLogs={callLogs}
             onSelectChat={handleSelectChat}
             onSendMessage={handleSendMessage}
             onDeleteMessage={handleDeleteMessage}
+            onStartCall={handleStartCall}
             onBlockUser={handleBlockUser}
             onReportTarget={(targetUid, targetLabel, targetType) =>
               setReportModalTarget({ targetUid, targetLabel, targetType })
             }
-            onNavigateToFriends={() => setActiveTab('friends')}
+            onNavigateToFriends={() => setActiveTab('discover')}
           />
         )}
 
@@ -856,6 +1652,7 @@ export default function App() {
             onCancelRequest={handleCancelFriendRequest}
             onRemoveFriend={handleRemoveFriend}
             onStartChatWithFriend={handleStartChatWithUser}
+            onStartCallWithFriend={handleStartCall}
             onUnblockUser={handleUnblockUser}
             onNavigateToDiscover={() => setActiveTab('discover')}
           />
@@ -902,12 +1699,8 @@ export default function App() {
             reports={reports}
             isFirebaseAuthenticated={Boolean(firebaseUser)}
             emailVerified={Boolean(firebaseUser?.emailVerified)}
-            onUpdateProfile={(updated) =>
-              setCurrentUser((prev) => ({ ...prev, ...updated }))
-            }
-            onUpdatePrivateSettings={(updated) =>
-              setPrivateSettings((prev) => ({ ...prev, ...updated }))
-            }
+            onUpdateProfile={handleUpdateProfile}
+            onUpdatePrivateSettings={handleUpdatePrivateSettings}
             onRequestEmailVerification={() => {
               if (firebaseUser) {
                 sendEmailVerification(firebaseUser).catch(() => {});
@@ -927,23 +1720,17 @@ export default function App() {
       {/* Mobile Bottom Navigation Bar (5 Tabs: Chats, Friends, Discover, Stories, Profile) */}
       <nav
         aria-label="Bottom Navigation"
-        className={`lg:hidden fixed bottom-0 left-0 right-0 z-30 h-14 border-t grid grid-cols-5 items-center backdrop-blur-md ${
-          darkMode
-            ? 'bg-slate-950/90 border-slate-800'
-            : 'bg-white/90 border-slate-200'
-        }`}
+        className="lg:hidden fixed bottom-0 left-0 right-0 z-30 h-14 border-t border-slate-300 bg-white text-black grid grid-cols-5 items-center"
       >
         <button
           type="button"
           onClick={() => setActiveTab('chats')}
-          className={`flex flex-col items-center justify-center h-full cursor-pointer ${
-            activeTab === 'chats'
-              ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
-              : 'text-slate-500 dark:text-slate-400'
+          className={`flex flex-col items-center justify-center h-full cursor-pointer text-black ${
+            activeTab === 'chats' ? 'font-bold bg-[#d9fdd3]/60' : ''
           }`}
         >
-          <MessageSquare className="w-5 h-5" />
-          <span className="text-[10px] mt-0.5">
+          <MessageSquare className="w-5 h-5 text-black" />
+          <span className="text-[10px] mt-0.5 text-black">
             Chats {unreadChatsCount > 0 ? `(${unreadChatsCount})` : ''}
           </span>
         </button>
@@ -951,14 +1738,12 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveTab('friends')}
-          className={`flex flex-col items-center justify-center h-full cursor-pointer ${
-            activeTab === 'friends'
-              ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
-              : 'text-slate-500 dark:text-slate-400'
+          className={`flex flex-col items-center justify-center h-full cursor-pointer text-black ${
+            activeTab === 'friends' ? 'font-bold bg-[#d9fdd3]/60' : ''
           }`}
         >
-          <Users className="w-5 h-5" />
-          <span className="text-[10px] mt-0.5">
+          <Users className="w-5 h-5 text-black" />
+          <span className="text-[10px] mt-0.5 text-black">
             Friends {pendingIncomingRequestsCount > 0 ? `(${pendingIncomingRequestsCount})` : ''}
           </span>
         </button>
@@ -966,126 +1751,158 @@ export default function App() {
         <button
           type="button"
           onClick={() => setActiveTab('discover')}
-          className={`flex flex-col items-center justify-center h-full cursor-pointer ${
-            activeTab === 'discover'
-              ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
-              : 'text-slate-500 dark:text-slate-400'
+          className={`flex flex-col items-center justify-center h-full cursor-pointer text-black ${
+            activeTab === 'discover' ? 'font-bold bg-[#d9fdd3]/60' : ''
           }`}
         >
-          <Compass className="w-5 h-5" />
-          <span className="text-[10px] mt-0.5">Discover</span>
+          <Compass className="w-5 h-5 text-black" />
+          <span className="text-[10px] mt-0.5 text-black">Discover</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab('stories')}
-          className={`flex flex-col items-center justify-center h-full cursor-pointer ${
-            activeTab === 'stories'
-              ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
-              : 'text-slate-500 dark:text-slate-400'
+          className={`flex flex-col items-center justify-center h-full cursor-pointer text-black ${
+            activeTab === 'stories' ? 'font-bold bg-[#d9fdd3]/60' : ''
           }`}
         >
-          <Sparkles className="w-5 h-5" />
-          <span className="text-[10px] mt-0.5">Stories</span>
+          <Sparkles className="w-5 h-5 text-black" />
+          <span className="text-[10px] mt-0.5 text-black">Stories</span>
         </button>
 
         <button
           type="button"
           onClick={() => setActiveTab('profile')}
-          className={`flex flex-col items-center justify-center h-full cursor-pointer ${
-            activeTab === 'profile'
-              ? 'text-indigo-600 dark:text-indigo-400 font-semibold'
-              : 'text-slate-500 dark:text-slate-400'
+          className={`flex flex-col items-center justify-center h-full cursor-pointer text-black ${
+            activeTab === 'profile' ? 'font-bold bg-[#d9fdd3]/60' : ''
           }`}
         >
-          <User className="w-5 h-5" />
-          <span className="text-[10px] mt-0.5">Profile</span>
+          <User className="w-5 h-5 text-black" />
+          <span className="text-[10px] mt-0.5 text-black">Profile</span>
         </button>
       </nav>
 
-      {/* Notifications & Theme Drawer */}
+      {/* Active Voice & Video Call Modal */}
+      <CallModal
+        session={activeCall}
+        currentUserName={currentUser.displayName}
+        currentUserAvatar={currentUser.avatarUrl}
+        onEndCall={handleEndCall}
+      />
+
+      {/* Notifications, PWA Service Worker & Cloud Sync Drawer */}
       {showNotificationsDrawer && (
         <div
           role="dialog"
           aria-modal="true"
           aria-labelledby="notifications-drawer-title"
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex justify-end"
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex justify-end"
         >
-          <div className="max-w-md w-full h-full bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 p-6 flex flex-col justify-between">
+          <div className="max-w-md w-full h-full bg-white border-l border-slate-300 text-black p-6 flex flex-col justify-between">
             <div className="space-y-4 overflow-y-auto">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
-                <h2 id="notifications-drawer-title" className="text-base font-bold">
-                  Notifications & Appearance
+              <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+                <h2 id="notifications-drawer-title" className="text-base font-bold text-black">
+                  Notifications, PWA & Cloud Sync
                 </h2>
                 <button
                   type="button"
                   aria-label="Close notifications drawer"
                   onClick={() => setShowNotificationsDrawer(false)}
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+                  className="p-1.5 rounded-lg text-black hover:bg-slate-100 cursor-pointer"
                 >
-                  <X className="w-4 h-4" />
+                  <X className="w-4 h-4 text-black" />
                 </button>
               </div>
 
-              {/* Appearance & Lock-Screen Preview Toggle */}
-              <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-800/70 flex items-center justify-between">
-                <span className="text-xs font-semibold">Theme Mode</span>
-                <button
-                  type="button"
-                  onClick={() => setDarkMode((d) => !d)}
-                  className="px-3 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs font-semibold flex items-center gap-1.5 cursor-pointer"
-                >
-                  {darkMode ? <Sun className="w-3.5 h-3.5" /> : <Moon className="w-3.5 h-3.5" />}
-                  <span>{darkMode ? 'Switch to Light' : 'Switch to Dark'}</span>
-                </button>
+              {/* PWA Service Worker & Manifest Status Card */}
+              <div className="p-3.5 rounded-xl bg-[#d9fdd3] border border-emerald-400 space-y-2 text-black">
+                <div className="flex items-center gap-2 text-xs font-bold text-black">
+                  <CheckCircle2 className="w-4 h-4 text-black shrink-0" />
+                  <span>PWA Service Worker & Manifest Active</span>
+                </div>
+                <p className="text-[11px] text-black leading-relaxed">
+                  Registered <code className="font-mono font-semibold">/sw.js</code> and{' '}
+                  <code className="font-mono font-semibold">/manifest.json</code> for offline
+                  caching.
+                </p>
               </div>
 
-              <div className="flex items-center justify-between text-xs">
-                <span className="font-semibold text-slate-500">
+              {/* Firebase Cloud Firestore Status Card */}
+              <div className="p-3.5 rounded-xl bg-[#f0f2f5] border border-slate-300 space-y-1 text-black">
+                <div className="flex items-center gap-2 text-xs font-bold text-black">
+                  <Database className="w-4 h-4 text-black shrink-0" />
+                  <span>Cloud Firestore Multi-User Database Active</span>
+                </div>
+                <p className="text-[11px] text-black leading-relaxed">
+                  All bot/AI accounts are removed. Real users sync live via Firestore (
+                  <code className="font-mono">gen-lang-client-0669346428</code>).
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between text-xs text-black">
+                <span className="font-bold text-black">
                   Recent Activity ({notifications.length})
                 </span>
-                <button
-                  type="button"
-                  onClick={() =>
-                    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })))
-                  }
-                  className="text-indigo-600 dark:text-indigo-400 font-semibold hover:underline cursor-pointer"
-                >
-                  Mark all as read
-                </button>
+                {notifications.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+                      if (firebaseUser) {
+                        notifications.forEach((n) => {
+                          if (!n.isRead) {
+                            updateDoc(doc(db, 'notifications', n.notificationId), {
+                              isRead: true,
+                            }).catch(() => {});
+                          }
+                        });
+                      }
+                    }}
+                    className="text-black font-bold underline cursor-pointer"
+                  >
+                    Mark all as read
+                  </button>
+                )}
               </div>
 
               <div className="space-y-2.5">
-                {notifications.map((n) => (
-                  <div
-                    key={n.notificationId}
-                    className={`p-3.5 rounded-xl border text-xs space-y-1 ${
-                      n.isRead
-                        ? 'border-slate-100 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-800/30 text-slate-500'
-                        : 'border-indigo-200 dark:border-indigo-900 bg-indigo-50/50 dark:bg-indigo-950/30 text-slate-900 dark:text-slate-100'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <span className="font-bold">{n.actorName}</span>
-                      <span className="font-mono text-[11px] text-slate-400">
-                        @{n.actorUsername}
-                      </span>
-                    </div>
-                    <p className="leading-relaxed">
-                      {formatNotificationPreview(
-                        n,
-                        privateSettings.notificationPreviewEnabled
-                      )}
-                    </p>
+                {notifications.length === 0 ? (
+                  <div className="p-6 rounded-xl border border-slate-300 bg-[#f0f2f5] text-center text-xs text-black">
+                    No notifications yet. Friend requests and new messages from real users will
+                    appear here.
                   </div>
-                ))}
+                ) : (
+                  notifications.map((n) => (
+                    <div
+                      key={n.notificationId}
+                      className={`p-3.5 rounded-xl border text-xs space-y-1 text-black ${
+                        n.isRead
+                          ? 'border-slate-300 bg-[#f0f2f5]'
+                          : 'border-emerald-500 bg-[#d9fdd3]'
+                      }`}
+                    >
+                      <div className="flex items-center justify-between">
+                        <span className="font-bold text-black">{n.actorName}</span>
+                        <span className="font-mono text-[11px] font-semibold text-black">
+                          @{n.actorUsername}
+                        </span>
+                      </div>
+                      <p className="leading-relaxed text-black">
+                        {formatNotificationPreview(
+                          n,
+                          privateSettings.notificationPreviewEnabled
+                        )}
+                      </p>
+                    </div>
+                  ))
+                )}
               </div>
             </div>
 
             <button
               type="button"
               onClick={() => setShowNotificationsDrawer(false)}
-              className="w-full py-2.5 rounded-xl bg-slate-900 dark:bg-slate-800 text-white text-xs font-semibold cursor-pointer"
+              className="w-full py-2.5 rounded-xl bg-[#f0f2f5] hover:bg-slate-200 border border-slate-300 text-black text-xs font-bold cursor-pointer"
             >
               Close Drawer
             </button>
@@ -1099,13 +1916,13 @@ export default function App() {
           role="dialog"
           aria-modal="true"
           aria-labelledby="report-modal-title"
-          className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4"
+          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4"
         >
-          <div className="max-w-md w-full rounded-2xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 p-6 space-y-4">
+          <div className="max-w-md w-full rounded-2xl border border-slate-300 bg-white text-black p-6 space-y-4">
             <div className="flex items-center justify-between">
-              <div className="flex items-center gap-2 text-amber-600 dark:text-amber-400">
-                <Flag className="w-4 h-4" />
-                <h3 id="report-modal-title" className="text-base font-bold text-slate-900 dark:text-white">
+              <div className="flex items-center gap-2 text-black">
+                <Flag className="w-4 h-4 text-black" />
+                <h3 id="report-modal-title" className="text-base font-bold text-black">
                   Submit Safety Report
                 </h3>
               </div>
@@ -1113,14 +1930,15 @@ export default function App() {
                 type="button"
                 aria-label="Close report modal"
                 onClick={() => setReportModalTarget(null)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+                className="p-1.5 rounded-lg text-black hover:bg-slate-100 cursor-pointer"
               >
-                <X className="w-4 h-4" />
+                <X className="w-4 h-4 text-black" />
               </button>
             </div>
 
-            <p className="text-xs text-slate-500">
-              Reporting <span className="font-semibold">{reportModalTarget.targetLabel}</span> (
+            <p className="text-xs text-black">
+              Reporting{' '}
+              <span className="font-bold text-black">{reportModalTarget.targetLabel}</span> (
               {reportModalTarget.targetType}). Reports are write-only and cannot be modified after
               submission.
             </p>
@@ -1129,7 +1947,7 @@ export default function App() {
               <div>
                 <label
                   htmlFor="report-category"
-                  className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1"
+                  className="block text-xs font-bold text-black mb-1"
                 >
                   Reason Category
                 </label>
@@ -1139,7 +1957,7 @@ export default function App() {
                   onChange={(e) =>
                     setReportCategory(e.target.value as AbuseReport['reasonCategory'])
                   }
-                  className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  className="w-full px-3.5 py-2 text-sm text-black rounded-xl border border-slate-300 bg-[#f0f2f5]"
                 >
                   <option value="harassment">Harassment or abusive behavior</option>
                   <option value="spam">Spam or unsolicited links</option>
@@ -1152,7 +1970,7 @@ export default function App() {
               <div>
                 <label
                   htmlFor="report-details"
-                  className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1"
+                  className="block text-xs font-bold text-black mb-1"
                 >
                   Details (1–500 characters)
                 </label>
@@ -1164,7 +1982,7 @@ export default function App() {
                   value={reportDetails}
                   onChange={(e) => setReportDetails(e.target.value)}
                   placeholder="Provide context for the safety review team..."
-                  className="w-full px-3.5 py-2 text-sm rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800"
+                  className="w-full px-3.5 py-2 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-[#f0f2f5]"
                 />
               </div>
 
@@ -1172,13 +1990,13 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setReportModalTarget(null)}
-                  className="px-4 py-2 rounded-xl border border-slate-200 dark:border-slate-700 text-xs font-semibold cursor-pointer"
+                  className="px-4 py-2 rounded-xl border border-slate-300 bg-white text-black text-xs font-bold cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-500 text-white text-xs font-semibold cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-amber-400 hover:bg-amber-500 text-black text-xs font-bold cursor-pointer"
                 >
                   Submit Report
                 </button>

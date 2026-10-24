@@ -158,3 +158,22 @@ export interface UserNotification {
   isRead: boolean;
   createdAt: string;
 }
+
+export type CallType = 'audio' | 'video';
+export type CallStatus = 'ringing' | 'connected' | 'ended' | 'missed';
+
+export interface CallLogEntry {
+  callId: string;
+  chatId: string;
+  callerUid: string;
+  peerUid: string;
+  peerName: string;
+  peerUsername: string;
+  peerAvatar: string;
+  callType: CallType;
+  direction: 'outgoing' | 'incoming';
+  status: CallStatus;
+  durationSeconds: number;
+  createdAt: string;
+}
+

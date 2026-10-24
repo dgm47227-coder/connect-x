@@ -1,0 +1,33 @@
+{
+  "id": "/",
+  "name": "ConnectX — Social Network & Real-Time Messaging",
+  "short_name": "ConnectX",
+  "description": "Social networking and real-time messaging platform with private chats, voice and video calls, friend requests, stories, and live Firebase Cloud Firestore sync.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "theme_color": "#ffffff",
+  "background_color": "#f0f2f5",
+  "categories": ["social", "communication"],
+  "icons": [
+    {
+      "src": "/pwa-192x192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any"
+    },
+    {
+      "src": "/pwa-maskable-512x512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "maskable"
+    }
+  ]
+}

@@ -185,6 +185,35 @@ export function formatRemainingStoryTime(expiresAtIso: string, nowMs: number = D
   return `${Math.max(1, minutes)}m left`;
 }
 
+export function formatCallDuration(seconds: number): string {
+  const safeSeconds = Math.max(0, Math.floor(seconds));
+  const hrs = Math.floor(safeSeconds / 3600);
+  const mins = Math.floor((safeSeconds % 3600) / 60);
+  const secs = safeSeconds % 60;
+  const pad = (n: number) => String(n).padStart(2, '0');
+  if (hrs > 0) {
+    return `${hrs}:${pad(mins)}:${pad(secs)}`;
+  }
+  return `${pad(mins)}:${pad(secs)}`;
+}
+
+export function canStartCallWithPeer(
+  callerUid: string,
+  peerUid: string,
+  blockedUids: Set<string>
+): { allowed: boolean; reason?: string } {
+  if (!isValidDocumentId(callerUid) || !isValidDocumentId(peerUid)) {
+    return { allowed: false, reason: 'Invalid caller or recipient UID.' };
+  }
+  if (callerUid === peerUid) {
+    return { allowed: false, reason: 'Cannot initiate a call with yourself.' };
+  }
+  if (blockedUids.has(peerUid)) {
+    return { allowed: false, reason: 'Cannot call a blocked account.' };
+  }
+  return { allowed: true };
+}
+
 export interface SecurityCheckContext {
   uid: string | null;
   emailVerified: boolean;

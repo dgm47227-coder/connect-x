@@ -12,6 +12,8 @@ import {
   filterActiveStories,
   canTransitionFriendRequest,
   formatNotificationPreview,
+  formatCallDuration,
+  canStartCallWithPeer,
   evaluateSecurityRulePayload,
 } from './connectxRules';
 
@@ -236,3 +238,16 @@ test('Dirty Dozen adversarial security payloads all return PERMISSION_DENIED', (
 
   assert.equal(isValidDocumentId('valid_doc-id_123'), true);
 });
+
+test('calling duration formatter and peer call authorization guard work accurately', () => {
+  assert.equal(formatCallDuration(0), '00:00');
+  assert.equal(formatCallDuration(42), '00:42');
+  assert.equal(formatCallDuration(125), '02:05');
+  assert.equal(formatCallDuration(3665), '1:01:05');
+
+  const blocked = new Set(['user_blocked_9']);
+  assert.equal(canStartCallWithPeer('user_alex_01', 'user_elena_02', blocked).allowed, true);
+  assert.equal(canStartCallWithPeer('user_alex_01', 'user_alex_01', blocked).allowed, false);
+  assert.equal(canStartCallWithPeer('user_alex_01', 'user_blocked_9', blocked).allowed, false);
+});
+
