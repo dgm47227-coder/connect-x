@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Search,
   Send,
@@ -86,14 +86,24 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
   const [sidebarFilter, setSidebarFilter] = useState<SidebarFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
   const [messageSearch, setMessageSearch] = useState('');
-  const [draftText, setDraftText] = useState('');
+  const [draftsByChat, setDraftsByChat] = useState<Record<string, string>>({});
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
   const [selectedMediaUrl, setSelectedMediaUrl] = useState('');
   const [showMediaPicker, setShowMediaPicker] = useState(false);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const [errorBanner, setErrorBanner] = useState<string | null>(null);
-  const [visibleCount, setVisibleCount] = useState(15);
+  const [visibleCount, setVisibleCount] = useState(30);
   const [simulatePeerTyping, setSimulatePeerTyping] = useState(false);
+  const [isSending, setIsSending] = useState(false);
+
+  const messagesEndRef = useRef<HTMLDivElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+
+  const currentDraft = activeChatId ? draftsByChat[activeChatId] || '' : '';
+  const setDraftText = (text: string) => {
+    if (!activeChatId) return;
+    setDraftsByChat((prev) => ({ ...prev, [activeChatId]: text }));
+  };
 
   const visibleChats = chats.filter((c) => {
     const otherUid =
@@ -149,31 +159,64 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
   const paginatedMessages = filteredMessages.slice(-visibleCount);
   const hasOlderMessages = filteredMessages.length > visibleCount;
 
-  const handleSend = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!activeChat) return;
+  // Auto-scroll to bottom on chat switch or when new messages arrive
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [activeChatId, paginatedMessages.length]);
+
+  // Dynamically adjust textarea height based on content
+  useEffect(() => {
+    if (textareaRef.current) {
+      textareaRef.current.style.height = 'auto';
+      textareaRef.current.style.height = `${Math.min(textareaRef.current.scrollHeight, 120)}px`;
+    }
+  }, [currentDraft]);
+
+  const handleSend = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    if (!activeChat || isSending) return;
     setErrorBanner(null);
 
+    const trimmed = currentDraft.trim();
     const mediaType: 'none' | 'image' = selectedMediaUrl ? 'image' : 'none';
-    const check = validateMessagePayload(draftText, selectedMediaUrl, mediaType);
+    if (!trimmed && !selectedMediaUrl) return;
+
+    const check = validateMessagePayload(trimmed, selectedMediaUrl, mediaType);
     if (!check.valid) {
       setErrorBanner(check.error || 'Invalid message');
       return;
     }
 
-    onSendMessage(
-      activeChat.chatId,
-      draftText.trim(),
-      selectedMediaUrl,
-      mediaType,
-      replyingTo ? replyingTo.messageId : '',
-      replyingTo ? replyingTo.text.slice(0, 140) : ''
-    );
+    setIsSending(true);
+    try {
+      await onSendMessage(
+        activeChat.chatId,
+        trimmed,
+        selectedMediaUrl,
+        mediaType,
+        replyingTo ? replyingTo.messageId : '',
+        replyingTo ? replyingTo.text.slice(0, 140) : ''
+      );
 
-    setDraftText('');
-    setSelectedMediaUrl('');
-    setReplyingTo(null);
-    setShowMediaPicker(false);
+      setDraftText('');
+      setSelectedMediaUrl('');
+      setReplyingTo(null);
+      setShowMediaPicker(false);
+      if (textareaRef.current) {
+        textareaRef.current.style.height = 'auto';
+      }
+    } catch {
+      setErrorBanner('Failed to send message. Please verify network connectivity.');
+    } finally {
+      setIsSending(false);
+    }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      handleSend();
+    }
   };
 
   const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -717,6 +760,7 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                   <span>{otherParticipantName} is typing a response...</span>
                 </div>
               )}
+              <div ref={messagesEndRef} />
             </div>
 
             {/* Reply / Media Preview Bars */}
@@ -818,37 +862,55 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
               </div>
             )}
 
-            {/* WhatsApp-Style Composer Form */}
+            {/* WhatsApp-Style Composer Form with Auto-expanding Textarea & Keyboard Protection */}
             <form
               onSubmit={handleSend}
-              className="p-3 border-t border-slate-300 flex items-center gap-2 bg-[#f0f2f5]"
+              className="p-3 border-t border-slate-300 flex items-end gap-2 bg-[#f0f2f5]"
             >
               <button
                 type="button"
                 aria-label="Attach image"
                 onClick={() => setShowMediaPicker((v) => !v)}
-                className="p-2.5 rounded-xl border border-slate-300 bg-white text-black hover:bg-slate-100 transition-colors cursor-pointer shrink-0"
+                className="p-2.5 rounded-xl border border-slate-300 bg-white text-black hover:bg-slate-100 transition-colors cursor-pointer shrink-0 mb-0.5"
               >
                 <ImageIcon className="w-4 h-4 text-black" />
               </button>
 
-              <input
-                type="text"
-                aria-label="Message input"
-                maxLength={2000}
-                value={draftText}
-                onChange={(e) => setDraftText(e.target.value)}
-                placeholder={`Message ${otherParticipantName}...`}
-                className="flex-1 px-3.5 py-2.5 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#25d366]"
-              />
+              <div className="flex-1 relative">
+                <textarea
+                  ref={textareaRef}
+                  rows={1}
+                  aria-label="Message input"
+                  maxLength={2000}
+                  value={currentDraft}
+                  onChange={(e) => setDraftText(e.target.value)}
+                  onKeyDown={handleKeyDown}
+                  placeholder={`Message ${otherParticipantName}... (Shift+Enter for newline)`}
+                  className="w-full px-3.5 py-2.5 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#25d366] resize-none overflow-y-auto max-h-32 transition-all leading-relaxed"
+                />
+              </div>
 
               <button
                 type="submit"
+                disabled={isSending || (!currentDraft.trim() && !selectedMediaUrl)}
                 aria-label="Send message"
-                className="px-4 py-2.5 rounded-xl bg-[#25d366] hover:bg-[#1ebe5d] text-black text-xs font-bold transition-colors flex items-center gap-1.5 shrink-0 cursor-pointer"
+                className={`px-4 py-2.5 rounded-xl text-black text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer mb-0.5 ${
+                  isSending || (!currentDraft.trim() && !selectedMediaUrl)
+                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-60'
+                    : 'bg-[#25d366] hover:bg-[#1ebe5d] active:scale-95 text-black shadow-xs'
+                }`}
               >
-                <span>Send</span>
-                <Send className="w-3.5 h-3.5 text-black" />
+                {isSending ? (
+                  <>
+                    <span>Sending</span>
+                    <Clock className="w-3.5 h-3.5 text-black animate-spin" />
+                  </>
+                ) : (
+                  <>
+                    <span>Send</span>
+                    <Send className="w-3.5 h-3.5 text-black" />
+                  </>
+                )}
               </button>
             </form>
           </>
