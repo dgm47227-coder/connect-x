@@ -74,7 +74,7 @@ service cloud.firestore {
     }
 
     match /users/{userId} {
-      allow get: if isSignedIn() && isValidId(userId) && (resource.data.uid == request.auth.uid || resource.data.isPublicProfile == true);
+      allow get: if isSignedIn() && isValidId(userId) && (userId == request.auth.uid || (resource != null && resource.data.isPublicProfile == true));
       allow list: if isSignedIn() && resource.data.isPublicProfile == true;
 
       allow create: if isVerifiedUser() &&
@@ -179,7 +179,8 @@ service cloud.firestore {
         isValidUsernameReservation(incoming()) &&
         incoming().username == username &&
         incoming().createdAt == request.time &&
-        existsAfter(/databases/$(database)/documents/users/$(request.auth.uid));
+        (existsAfter(/databases/$(database)/documents/users/$(request.auth.uid)) ||
+         exists(/databases/$(database)/documents/users/$(request.auth.uid)));
 
       allow update: if false;
       allow delete: if isVerifiedUser() && isValidUsername(username) && existing().uid == request.auth.uid;

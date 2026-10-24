@@ -203,8 +203,14 @@ export default function App() {
 
         try {
           const userRef = doc(db, 'users', user.uid);
-          const snap = await getDoc(userRef);
-          if (snap.exists()) {
+          let snap = null;
+          try {
+            snap = await getDoc(userRef);
+          } catch (readErr) {
+            console.warn('Initial user profile lookup returned:', readErr);
+          }
+
+          if (snap && snap.exists()) {
             const data = snap.data();
             const existingProfile: UserPublicProfile = {
               uid: user.uid,
@@ -242,21 +248,26 @@ export default function App() {
             };
             setCurrentUser(newProfile);
 
-            await setDoc(userRef, {
-              uid: user.uid,
-              username: chosenUsername,
-              displayName: chosenDisplayName,
-              bio: chosenBio,
-              avatarUrl,
-              friendsCount: 0,
-              privacyWhoCanRequest: 'everyone',
-              privacyStoryAudience: 'friends',
-              privacyShowReadReceipts: true,
-              privacyShowOnlineStatus: true,
-              isPublicProfile: true,
-              createdAt: serverTimestamp(),
-              updatedAt: serverTimestamp(),
-            });
+            try {
+              await setDoc(userRef, {
+                uid: user.uid,
+                username: chosenUsername,
+                displayName: chosenDisplayName,
+                bio: chosenBio,
+                avatarUrl,
+                friendsCount: 0,
+                privacyWhoCanRequest: 'everyone',
+                privacyStoryAudience: 'friends',
+                privacyShowReadReceipts: true,
+                privacyShowOnlineStatus: true,
+                isPublicProfile: true,
+                createdAt: serverTimestamp(),
+                updatedAt: serverTimestamp(),
+              });
+              console.log('Successfully registered user in Cloud Firestore:', user.uid);
+            } catch (writeErr) {
+              console.error('Error writing user profile to Firestore:', writeErr);
+            }
 
             await setDoc(doc(db, 'users_private', user.uid), {
               uid: user.uid,
@@ -267,18 +278,23 @@ export default function App() {
               notifyStories: true,
               createdAt: serverTimestamp(),
               updatedAt: serverTimestamp(),
-            }).catch(() => {});
+            }).catch((e) => console.warn('users_private creation warning:', e));
 
             await setDoc(doc(db, 'usernames', chosenUsername), {
               username: chosenUsername,
               uid: user.uid,
               createdAt: serverTimestamp(),
-            }).catch(() => {});
+            }).catch((e) => console.warn('usernames reservation warning:', e));
           }
 
           const privRef = doc(db, 'users_private', user.uid);
-          const privSnap = await getDoc(privRef);
-          if (privSnap.exists()) {
+          let privSnap = null;
+          try {
+            privSnap = await getDoc(privRef);
+          } catch (pErr) {
+            console.warn('Private settings read warning:', pErr);
+          }
+          if (privSnap && privSnap.exists()) {
             const pData = privSnap.data();
             setPrivateSettings({
               uid: user.uid,
@@ -297,7 +313,8 @@ export default function App() {
               email: chosenEmail,
             }));
           }
-        } catch {
+        } catch (err) {
+          console.error('User auth sync error:', err);
           setCurrentUser((prev) => ({
             ...prev,
             uid: user.uid,
@@ -1503,6 +1520,9 @@ export default function App() {
       <AuthScreen
         darkMode={darkMode}
         onToggleDarkMode={() => setDarkMode((d) => !d)}
+        onSetPendingProfile={(p) => {
+          pendingProfileRef.current = p;
+        }}
         onEnterSandbox={handleEnterSandbox}
         existingUsernames={existingUsernames}
       />

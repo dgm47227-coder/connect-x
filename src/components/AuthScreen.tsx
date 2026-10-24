@@ -30,6 +30,12 @@ import { normalizeUsername, validateProfileInput } from '../utils/connectxRules'
 interface AuthScreenProps {
   darkMode: boolean;
   onToggleDarkMode: () => void;
+  onSetPendingProfile?: (customProfile: {
+    username: string;
+    displayName: string;
+    bio: string;
+    email: string;
+  }) => void;
   onEnterSandbox: (customProfile?: {
     username: string;
     displayName: string;
@@ -42,6 +48,7 @@ interface AuthScreenProps {
 type AuthMode = 'login' | 'register' | 'reset';
 
 export const AuthScreen: React.FC<AuthScreenProps> = ({
+  onSetPendingProfile,
   onEnterSandbox,
   existingUsernames,
 }) => {
@@ -153,7 +160,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
           bio: bio.trim() || 'Connected on ConnectX real-time messaging.',
           email: trimmedEmail,
         };
-        onEnterSandbox(customProfile);
+        onSetPendingProfile?.(customProfile);
         const cred = await createUserWithEmailAndPassword(auth, trimmedEmail, password);
         await sendEmailVerification(cred.user).catch(() => {});
         setStatusBanner('Account created & synced to Firebase Cloud Firestore!');
