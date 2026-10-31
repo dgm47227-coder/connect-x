@@ -1,0 +1,41 @@
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+    // Default Deny
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isValidImage() {
+      return request.resource.size <= 10 * 1024 * 1024 &&
+             request.resource.contentType.matches('image/(jpeg|png|webp|gif|svg\\+xml)');
+    }
+
+    // User Profile Avatars
+    match /avatars/{userId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(userId) && isValidImage();
+    }
+
+    // Stories Media
+    match /stories/{userId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isOwner(userId) && isValidImage();
+    }
+
+    // Chat Attachments
+    match /chat_media/{chatId}/{fileName} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn() && isValidImage();
+    }
+  }
+}

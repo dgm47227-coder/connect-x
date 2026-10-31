@@ -19,6 +19,12 @@ import {
   shouldDeliverNotification,
   formatNotificationTitle,
   formatNotificationBody,
+  validatePasswordStrength,
+  checkLoginRateLimit,
+  recordFailedLogin,
+  resetFailedLogins,
+  canModifyGroup,
+  isGroupMember,
 } from './connectxRules';
 
 test('username normalization and validation enforces 3-30 lowercase alphanumeric/underscore rules', () => {
@@ -298,5 +304,75 @@ test('smart notification preferences, mute filter, and privacy title/body format
   assert.equal(formatNotificationBody('missed_call', 'Alex', '', true), 'You missed a call from Alex.');
   assert.equal(formatNotificationBody('missed_call', 'Alex', '', false), 'You missed a call.');
 });
+
+test('password strength validator enforces 8+ characters, mixed case, number, and symbol', () => {
+  const weak1 = validatePasswordStrength('short');
+  assert.equal(weak1.valid, false);
+  assert.equal(weak1.hasMinLength, false);
+
+  const weak2 = validatePasswordStrength('alllowercasepassword');
+  assert.equal(weak2.valid, false);
+  assert.equal(weak2.hasUppercase, false);
+  assert.equal(weak2.hasNumber, false);
+  assert.equal(weak2.hasSpecialChar, false);
+
+  const medium = validatePasswordStrength('Password123');
+  assert.equal(medium.valid, false); // missing special char
+  assert.equal(medium.hasSpecialChar, false);
+
+  const strong = validatePasswordStrength('P@ssw0rd!Secure');
+  assert.equal(strong.valid, true);
+  assert.equal(strong.score, 4);
+  assert.equal(strong.feedback.length, 0);
+});
+
+test('login rate limiter blocks rapid automated brute-force attempts after 5 failures', () => {
+  const testId = 'attacker@test.com';
+  resetFailedLogins(testId);
+
+  // Initial attempt should be allowed with 5 attempts left
+  let check = checkLoginRateLimit(testId);
+  assert.equal(check.allowed, true);
+  assert.equal(check.attemptsLeft, 5);
+
+  // 4 failed attempts
+  for (let i = 0; i < 4; i++) {
+    recordFailedLogin(testId);
+  }
+  check = checkLoginRateLimit(testId);
+  assert.equal(check.allowed, true);
+  assert.equal(check.attemptsLeft, 1);
+
+  // 5th failed attempt triggers 60s lockout
+  recordFailedLogin(testId);
+  check = checkLoginRateLimit(testId);
+  assert.equal(check.allowed, false);
+  assert.ok(check.remainingLockoutSeconds > 0 && check.remainingLockoutSeconds <= 60);
+
+  // Reset after successful login
+  resetFailedLogins(testId);
+  check = checkLoginRateLimit(testId);
+  assert.equal(check.allowed, true);
+  assert.equal(check.attemptsLeft, 5);
+});
+
+test('group chat authorization guards distinguish administrators from regular members', () => {
+  const group = {
+    creatorUid: 'user_admin_1',
+    adminUids: ['user_admin_1', 'user_admin_2'],
+    memberUids: ['user_admin_1', 'user_admin_2', 'user_member_3'],
+  };
+
+  // Admin checks
+  assert.equal(canModifyGroup('user_admin_1', group), true);
+  assert.equal(canModifyGroup('user_admin_2', group), true);
+  assert.equal(canModifyGroup('user_member_3', group), false);
+  assert.equal(canModifyGroup('user_stranger_4', group), false);
+
+  // Membership checks
+  assert.equal(isGroupMember('user_member_3', group), true);
+  assert.equal(isGroupMember('user_stranger_4', group), false);
+});
+
 
 

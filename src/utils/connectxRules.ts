@@ -456,3 +456,135 @@ export function evaluateSecurityRulePayload(
       return { allowed: false, violation: 'PERMISSION_DENIED: Default deny rule' };
   }
 }
+
+/**
+ * Validates password strength for registration and security updates.
+ * Requires 8+ chars, uppercase, lowercase, number, and special character.
+ */
+export function validatePasswordStrength(password: string) {
+  const hasMinLength = password.length >= 8;
+  const hasUppercase = /[A-Z]/.test(password);
+  const hasLowercase = /[a-z]/.test(password);
+  const hasNumber = /[0-9]/.test(password);
+  const hasSpecialChar = /[!@#$%^&*()_+\-=[\]{};':"\\|,.<>/?`~]/.test(password);
+
+  const feedback: string[] = [];
+  if (!hasMinLength) feedback.push('At least 8 characters');
+  if (!hasUppercase) feedback.push('At least one uppercase letter (A-Z)');
+  if (!hasLowercase) feedback.push('At least one lowercase letter (a-z)');
+  if (!hasNumber) feedback.push('At least one digit (0-9)');
+  if (!hasSpecialChar) feedback.push('At least one special character (!@#$%...)');
+
+  let score = 0;
+  if (hasMinLength) score++;
+  if (hasUppercase && hasLowercase) score++;
+  if (hasNumber) score++;
+  if (hasSpecialChar) score++;
+
+  return {
+    valid: hasMinLength && hasUppercase && hasLowercase && hasNumber && hasSpecialChar,
+    score, // 0 to 4
+    hasMinLength,
+    hasUppercase,
+    hasLowercase,
+    hasNumber,
+    hasSpecialChar,
+    feedback,
+  };
+}
+
+// In-memory rate limiting tracker for authentication abuse prevention
+interface RateLimitEntry {
+  attempts: number;
+  lastAttemptMs: number;
+  lockedUntilMs: number;
+}
+
+const rateLimitStore = new Map<string, RateLimitEntry>();
+const MAX_FAILED_ATTEMPTS = 5;
+const LOCKOUT_DURATION_MS = 60 * 1000; // 60s
+const ATTEMPT_WINDOW_MS = 5 * 60 * 1000; // 5m
+
+export function checkLoginRateLimit(identifier: string, nowMs = Date.now()) {
+  const cleanId = identifier.trim().toLowerCase();
+  const entry = rateLimitStore.get(cleanId);
+
+  if (!entry) {
+    return {
+      allowed: true,
+      remainingLockoutSeconds: 0,
+      attemptsLeft: MAX_FAILED_ATTEMPTS,
+    };
+  }
+
+  // Check if locked out
+  if (entry.lockedUntilMs > nowMs) {
+    const remainingSeconds = Math.ceil((entry.lockedUntilMs - nowMs) / 1000);
+    return {
+      allowed: false,
+      remainingLockoutSeconds: remainingSeconds,
+      attemptsLeft: 0,
+    };
+  }
+
+  // Window reset
+  if (nowMs - entry.lastAttemptMs > ATTEMPT_WINDOW_MS) {
+    rateLimitStore.delete(cleanId);
+    return {
+      allowed: true,
+      remainingLockoutSeconds: 0,
+      attemptsLeft: MAX_FAILED_ATTEMPTS,
+    };
+  }
+
+  const attemptsLeft = Math.max(0, MAX_FAILED_ATTEMPTS - entry.attempts);
+  return {
+    allowed: true,
+    remainingLockoutSeconds: 0,
+    attemptsLeft,
+  };
+}
+
+export function recordFailedLogin(identifier: string, nowMs = Date.now()) {
+  const cleanId = identifier.trim().toLowerCase();
+  const entry = rateLimitStore.get(cleanId) || {
+    attempts: 0,
+    lastAttemptMs: nowMs,
+    lockedUntilMs: 0,
+  };
+
+  entry.attempts += 1;
+  entry.lastAttemptMs = nowMs;
+
+  if (entry.attempts >= MAX_FAILED_ATTEMPTS) {
+    entry.lockedUntilMs = nowMs + LOCKOUT_DURATION_MS;
+  }
+
+  rateLimitStore.set(cleanId, entry);
+  return checkLoginRateLimit(cleanId, nowMs);
+}
+
+export function resetFailedLogins(identifier: string) {
+  const cleanId = identifier.trim().toLowerCase();
+  rateLimitStore.delete(cleanId);
+}
+
+/**
+ * Validates group chat permission controls.
+ */
+export function canModifyGroup(
+  userUid: string,
+  group: { creatorUid: string; adminUids: string[] }
+): boolean {
+  if (!userUid) return false;
+  return group.creatorUid === userUid || (group.adminUids && group.adminUids.includes(userUid));
+}
+
+export function isGroupMember(
+  userUid: string,
+  group: { memberUids: string[] }
+): boolean {
+  if (!userUid || !group.memberUids) return false;
+  return group.memberUids.includes(userUid);
+}
+

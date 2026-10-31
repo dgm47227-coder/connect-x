@@ -2,7 +2,7 @@ export type NavTab = 'chats' | 'friends' | 'discover' | 'stories' | 'profile';
 
 export type FriendRequestPolicy = 'everyone' | 'none';
 export type StoryAudience = 'friends' | 'public';
-export type MessageDeliveryStatus = 'sent' | 'delivered' | 'read';
+export type MessageDeliveryStatus = 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
 export type FriendRequestStatus = 'pending' | 'accepted' | 'rejected' | 'cancelled';
 
 export interface UserPublicProfile {
@@ -101,8 +101,78 @@ export interface ChatMessage {
   replyToText: string;
   status: MessageDeliveryStatus;
   isDeleted: boolean;
+  isEncrypted?: boolean;
+  ciphertext?: string;
+  iv?: string;
+  keyId?: string;
   createdAt: string;
   updatedAt: string;
+}
+
+export interface GroupChat {
+  groupId: string;
+  name: string;
+  description: string;
+  avatarUrl: string;
+  creatorUid: string;
+  adminUids: string[];
+  memberUids: string[];
+  memberNames: Record<string, string>;
+  lastMessageText: string;
+  lastMessageSenderId: string;
+  lastMessageSenderName: string;
+  isEncrypted?: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface GroupMessage {
+  messageId: string;
+  groupId: string;
+  senderId: string;
+  senderName: string;
+  senderAvatar?: string;
+  text: string;
+  mediaUrl: string;
+  mediaType: 'none' | 'image';
+  isEncrypted?: boolean;
+  ciphertext?: string;
+  iv?: string;
+  status: MessageDeliveryStatus;
+  isDeleted: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UserKeyRecord {
+  uid: string;
+  publicKeyJwk: string;
+  safetyNumber: string;
+  algorithm: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface PasswordValidationResult {
+  valid: boolean;
+  score: number; // 0 (very weak) to 4 (strong)
+  hasMinLength: boolean;
+  hasUppercase: boolean;
+  hasLowercase: boolean;
+  hasNumber: boolean;
+  hasSpecialChar: boolean;
+  feedback: string[];
+}
+
+export interface RegisteredDevice {
+  tokenId: string;
+  uid: string;
+  platform: 'android' | 'ios' | 'web';
+  deviceModel: string;
+  userAgent: string;
+  createdAt: string;
+  updatedAt: string;
+  isCurrentDevice?: boolean;
 }
 
 export interface StoryViewRecord {

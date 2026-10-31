@@ -14,6 +14,9 @@ import {
   HelpCircle,
   Sparkles,
   Database,
+  Check,
+  X as XIcon,
+  ShieldAlert,
 } from 'lucide-react';
 import {
   auth,
@@ -25,7 +28,14 @@ import {
   sendPasswordResetEmail,
   sendEmailVerification,
 } from '../firebase';
-import { normalizeUsername, validateProfileInput } from '../utils/connectxRules';
+import {
+  normalizeUsername,
+  validateProfileInput,
+  validatePasswordStrength,
+  checkLoginRateLimit,
+  recordFailedLogin,
+  resetFailedLogins,
+} from '../utils/connectxRules';
 
 interface AuthScreenProps {
   darkMode: boolean;
@@ -124,12 +134,24 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
       return;
     }
 
-    if (password.length < 8) {
-      setErrorMessage('Password must be at least 8 characters long.');
-      return;
+    if (mode === 'login') {
+      const rateCheck = checkLoginRateLimit(trimmedEmail);
+      if (!rateCheck.allowed) {
+        setErrorMessage(
+          `Security lockout: Too many failed login attempts. Please wait ${rateCheck.remainingLockoutSeconds}s before retrying.`
+        );
+        return;
+      }
     }
 
     if (mode === 'register') {
+      const strengthCheck = validatePasswordStrength(password);
+      if (!strengthCheck.valid) {
+        setErrorMessage(
+          'Password does not meet security requirements: 8+ characters with uppercase, lowercase, number, and special character.'
+        );
+        return;
+      }
       if (password !== confirmPassword) {
         setErrorMessage('Passwords do not match.');
         return;
@@ -153,6 +175,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
     try {
       if (mode === 'login') {
         await signInWithEmailAndPassword(auth, trimmedEmail, password);
+        resetFailedLogins(trimmedEmail);
       } else {
         const customProfile = {
           username: normalizedHandle,
@@ -166,6 +189,15 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         setStatusBanner('Account created & synced to Firebase Cloud Firestore!');
       }
     } catch (err: unknown) {
+      if (mode === 'login') {
+        const rateCheck = recordFailedLogin(trimmedEmail);
+        if (!rateCheck.allowed) {
+          setErrorMessage(
+            `Account temporarily locked due to repeated failed attempts. Please wait ${rateCheck.remainingLockoutSeconds}s.`
+          );
+          return;
+        }
+      }
       const msg = err instanceof Error ? err.message : String(err);
       if (
         msg.includes('auth/operation-not-allowed') ||
@@ -194,7 +226,10 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         msg.includes('auth/wrong-password') ||
         msg.includes('auth/user-not-found')
       ) {
-        setErrorMessage('Invalid email or password. Please check your credentials.');
+        const rateCheck = checkLoginRateLimit(trimmedEmail);
+        setErrorMessage(
+          `Invalid email or password. (${rateCheck.attemptsLeft} attempt${rateCheck.attemptsLeft === 1 ? '' : 's'} remaining).`
+        );
       } else if (msg.includes('auth/email-already-in-use')) {
         setErrorMessage('This email address is already registered. Switch to Sign In.');
       } else {
@@ -549,6 +584,139 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                       {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
                     </button>
                   </div>
+
+                  {/* Password Strength Meter (Registration Mode) */}
+                  {mode === 'register' && password.length > 0 && (() => {
+                    const strength = validatePasswordStrength(password);
+                    return (
+                      <div className="mt-2.5 p-3 rounded-2xl bg-slate-50 border border-slate-200 text-xs space-y-2 animate-in fade-in duration-200">
+                        <div className="flex items-center justify-between">
+                          <span className="font-bold text-slate-700">Password Security</span>
+                          <span
+                            className={`font-bold text-[11px] ${
+                              strength.score <= 1
+                                ? 'text-rose-600'
+                                : strength.score <= 3
+                                ? 'text-amber-600'
+                                : 'text-emerald-700'
+                            }`}
+                          >
+                            {strength.score <= 1
+                              ? 'Weak'
+                              : strength.score <= 3
+                              ? 'Moderate'
+                              : 'Strong & Secure'}
+                          </span>
+                        </div>
+
+                        {/* Segmented Strength Bar */}
+                        <div className="grid grid-cols-4 gap-1.5 h-1.5 w-full">
+                          <div
+                            className={`rounded-full transition-colors ${
+                              strength.score >= 1
+                                ? strength.score === 1
+                                  ? 'bg-rose-500'
+                                  : 'bg-emerald-500'
+                                : 'bg-slate-200'
+                            }`}
+                          />
+                          <div
+                            className={`rounded-full transition-colors ${
+                              strength.score >= 2
+                                ? strength.score <= 2
+                                  ? 'bg-amber-500'
+                                  : 'bg-emerald-500'
+                                : 'bg-slate-200'
+                            }`}
+                          />
+                          <div
+                            className={`rounded-full transition-colors ${
+                              strength.score >= 3 ? 'bg-emerald-500' : 'bg-slate-200'
+                            }`}
+                          />
+                          <div
+                            className={`rounded-full transition-colors ${
+                              strength.score >= 4 ? 'bg-[#008C5A]' : 'bg-slate-200'
+                            }`}
+                          />
+                        </div>
+
+                        {/* Live Checklist */}
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-1 pt-1 text-[11px]">
+                          <div
+                            className={`flex items-center gap-1.5 ${
+                              strength.hasMinLength
+                                ? 'text-emerald-700 font-medium'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {strength.hasMinLength ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            ) : (
+                              <div className="w-3.5 h-3.5 rounded-full border border-slate-300 shrink-0" />
+                            )}
+                            <span>8+ characters</span>
+                          </div>
+                          <div
+                            className={`flex items-center gap-1.5 ${
+                              strength.hasUppercase
+                                ? 'text-emerald-700 font-medium'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {strength.hasUppercase ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            ) : (
+                              <div className="w-3.5 h-3.5 rounded-full border border-slate-300 shrink-0" />
+                            )}
+                            <span>Uppercase (A-Z)</span>
+                          </div>
+                          <div
+                            className={`flex items-center gap-1.5 ${
+                              strength.hasLowercase
+                                ? 'text-emerald-700 font-medium'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {strength.hasLowercase ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            ) : (
+                              <div className="w-3.5 h-3.5 rounded-full border border-slate-300 shrink-0" />
+                            )}
+                            <span>Lowercase (a-z)</span>
+                          </div>
+                          <div
+                            className={`flex items-center gap-1.5 ${
+                              strength.hasNumber
+                                ? 'text-emerald-700 font-medium'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {strength.hasNumber ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            ) : (
+                              <div className="w-3.5 h-3.5 rounded-full border border-slate-300 shrink-0" />
+                            )}
+                            <span>Number (0-9)</span>
+                          </div>
+                          <div
+                            className={`flex items-center gap-1.5 sm:col-span-2 ${
+                              strength.hasSpecialChar
+                                ? 'text-emerald-700 font-medium'
+                                : 'text-slate-400'
+                            }`}
+                          >
+                            {strength.hasSpecialChar ? (
+                              <Check className="w-3.5 h-3.5 text-emerald-600 shrink-0" />
+                            ) : (
+                              <div className="w-3.5 h-3.5 rounded-full border border-slate-300 shrink-0" />
+                            )}
+                            <span>Special symbol (!@#$%...)</span>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -568,7 +736,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
                     value={confirmPassword}
                     onChange={(e) => setConfirmPassword(e.target.value)}
                     placeholder="Re-enter your password"
-                    className="w-full px-3.5 py-2.5 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-[#f0f2f5] focus:outline-none focus:ring-2 focus:ring-[#25d366]"
+                    className="w-full px-3.5 py-2.5 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-[#f0f2f5] focus:outline-none focus:ring-2 focus:ring-[#008C5A]"
                   />
                 </div>
               )}
@@ -576,7 +744,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
               <button
                 type="submit"
                 disabled={loading}
-                className="w-full py-2.5 px-4 rounded-xl bg-[#d9fdd3] border border-emerald-500 hover:bg-[#25d366] disabled:opacity-50 text-black text-sm font-bold transition-colors cursor-pointer"
+                className="w-full py-2.5 px-4 rounded-xl bg-[#008C5A] hover:bg-[#006B46] text-white shadow-md shadow-emerald-700/20 disabled:opacity-50 text-sm font-bold transition-all cursor-pointer"
               >
                 {loading
                   ? 'Connecting...'

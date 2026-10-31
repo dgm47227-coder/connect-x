@@ -12,6 +12,10 @@ import {
   WifiOff,
   Database,
   CheckCircle2,
+  Shield,
+  ShieldCheck,
+  Moon,
+  Sun,
 } from 'lucide-react';
 import { onAuthStateChanged, User as FirebaseUser } from 'firebase/auth';
 import {
@@ -53,6 +57,9 @@ import {
   UserNotification,
   UserPrivateSettings,
   UserPublicProfile,
+  GroupChat,
+  GroupMessage,
+  DeviceTokenRecord,
 } from './types/connectx';
 import {
   getDeterministicPairId,
@@ -90,6 +97,13 @@ import { InAppNotificationBanner } from './components/InAppNotificationBanner';
 import { PrePermissionModal } from './components/PrePermissionModal';
 import { NotificationSettingsModal } from './components/NotificationSettingsModal';
 import { NotificationCenter } from './components/NotificationCenter';
+import { SecuritySettingsModal } from './components/SecuritySettingsModal';
+import { CreateGroupModal } from './components/CreateGroupModal';
+import {
+  getOrGenerateLocalKeyPair,
+  encryptDirectMessage,
+  decryptDirectMessage,
+} from './services/e2eeService';
 import {
   registerDeviceToken,
   unregisterDeviceToken,
@@ -161,6 +175,12 @@ export default function App() {
   const [showNotificationSettings, setShowNotificationSettings] = useState(false);
   const [showPrePermissionModal, setShowPrePermissionModal] = useState(false);
   const [foregroundBannerNotif, setForegroundBannerNotif] = useState<UserNotification | null>(null);
+  const [showSecuritySettings, setShowSecuritySettings] = useState(false);
+  const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
+  const [groups, setGroups] = useState<GroupChat[]>([]);
+  const [activeGroupId, setActiveGroupId] = useState<string | null>(null);
+  const [registeredDevices, setRegisteredDevices] = useState<DeviceTokenRecord[]>([]);
+  const [safetyNumber, setSafetyNumber] = useState<string>('CX-8842-1920-5512-4019-7261');
 
   const privateSettingsRef = useRef(privateSettings);
   privateSettingsRef.current = privateSettings;
@@ -362,6 +382,11 @@ export default function App() {
               email: chosenEmail,
             }));
           }
+
+          // Initialize or load local E2EE cryptographic keypair
+          getOrGenerateLocalKeyPair(user.uid)
+            .then(({ safetyNumber }) => setSafetyNumber(safetyNumber))
+            .catch((err) => console.warn('E2EE key initialization:', err));
 
           // Register device token for background push notifications
           registerDeviceToken(user.uid).catch((tokenErr) => {
@@ -734,6 +759,57 @@ export default function App() {
       () => {}
     );
 
+    const unsubGroups = onSnapshot(
+      query(collection(db, 'groups'), where('memberUids', 'array-contains', firebaseUser.uid)),
+      (snap) => {
+        const remoteGroups: GroupChat[] = [];
+        snap.forEach((d) => {
+          const data = d.data();
+          remoteGroups.push({
+            groupId: d.id,
+            name: String(data.name || 'Group Chat'),
+            description: String(data.description || ''),
+            avatarUrl: String(data.avatarUrl || ''),
+            creatorUid: String(data.creatorUid),
+            adminUids: Array.isArray(data.adminUids) ? data.adminUids : [],
+            memberUids: Array.isArray(data.memberUids) ? data.memberUids : [],
+            memberNames: typeof data.memberNames === 'object' ? data.memberNames : {},
+            lastMessageText: String(data.lastMessageText || ''),
+            lastMessageSenderId: String(data.lastMessageSenderId || ''),
+            lastMessageSenderName: String(data.lastMessageSenderName || ''),
+            createdAt: toIsoString(data.createdAt),
+            updatedAt: toIsoString(data.updatedAt),
+          });
+        });
+        remoteGroups.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        setGroups(remoteGroups);
+      },
+      () => {}
+    );
+
+    const unsubDevices = onSnapshot(
+      query(collection(db, 'device_tokens'), where('uid', '==', firebaseUser.uid)),
+      (snap) => {
+        const remoteTokens: DeviceTokenRecord[] = [];
+        snap.forEach((d) => {
+          const data = d.data();
+          remoteTokens.push({
+            tokenId: d.id,
+            uid: String(data.uid),
+            token: String(data.token),
+            platform: data.platform as 'android' | 'ios' | 'web',
+            deviceModel: data.deviceModel ? String(data.deviceModel) : undefined,
+            userAgent: data.userAgent ? String(data.userAgent) : undefined,
+            createdAt: toIsoString(data.createdAt),
+            updatedAt: toIsoString(data.updatedAt),
+          });
+        });
+        remoteTokens.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        setRegisteredDevices(remoteTokens);
+      },
+      () => {}
+    );
+
     return () => {
       unsubUsers();
       unsubInReq();
@@ -745,6 +821,8 @@ export default function App() {
       unsubStories();
       unsubBlocks();
       unsubNotifications();
+      unsubGroups();
+      unsubDevices();
     };
   }, [authReady, firebaseUser]);
 
@@ -774,6 +852,10 @@ export default function App() {
       const list: ChatMessage[] = [];
       snap.forEach((d) => {
         const data = d.data();
+        const isEnc = Boolean(data.isEncrypted);
+        const ciphertext = data.ciphertext ? String(data.ciphertext) : undefined;
+        const iv = data.iv ? String(data.iv) : undefined;
+
         list.push({
           messageId: d.id,
           chatId: String(data.chatId || activeChatId),
@@ -786,9 +868,25 @@ export default function App() {
           replyToText: String(data.replyToText || ''),
           status: (data.status as ChatMessage['status']) || 'delivered',
           isDeleted: Boolean(data.isDeleted),
+          isEncrypted: isEnc,
+          ciphertext,
+          iv,
           createdAt: toIsoString(data.createdAt),
           updatedAt: toIsoString(data.updatedAt),
         });
+
+        // Asynchronously decrypt incoming encrypted payload using local device private key
+        if (isEnc && ciphertext && iv) {
+          decryptDirectMessage(ciphertext, iv, String(data.senderId)).then((plain) => {
+            setMessagesByChat((prev) => {
+              const current = prev[activeChatId] || [];
+              const updated = current.map((m) =>
+                m.messageId === d.id ? { ...m, text: plain } : m
+              );
+              return { ...prev, [activeChatId]: updated };
+            });
+          });
+        }
       });
       return list;
     };
@@ -948,7 +1046,7 @@ export default function App() {
       mediaType,
       replyToMessageId,
       replyToText,
-      status: 'delivered',
+      status: 'sending',
       isDeleted: false,
       createdAt: nowIso,
       updatedAt: nowIso,
@@ -980,13 +1078,38 @@ export default function App() {
       )
     );
 
+    // End-to-End Encryption
+    let payloadText = text;
+    let encResult = { ciphertext: text, iv: '', isEncrypted: false };
+    if (text) {
+      encResult = await encryptDirectMessage(text, recipientId);
+      if (encResult.isEncrypted) {
+        payloadText = encResult.ciphertext;
+      }
+    }
+
     if (firebaseUser) {
       try {
         await setDoc(doc(db, 'chats', chatId, 'messages', messageId), {
           ...newMsg,
+          text: payloadText,
+          isEncrypted: encResult.isEncrypted,
+          ciphertext: encResult.isEncrypted ? encResult.ciphertext : null,
+          iv: encResult.isEncrypted ? encResult.iv : null,
+          status: 'delivered',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         });
+
+        // Update local optimistic message state to delivered
+        setMessagesByChat((prev) => ({
+          ...prev,
+          [chatId]: (prev[chatId] || []).map((m) =>
+            m.messageId === messageId
+              ? { ...m, status: 'delivered', isEncrypted: encResult.isEncrypted }
+              : m
+          ),
+        }));
 
         await updateDoc(doc(db, 'chats', chatId), {
           lastMessageText: previewSummary,
@@ -1012,12 +1135,96 @@ export default function App() {
           targetId: chatId,
         }).catch(() => {});
       } catch (err) {
+        // Mark message as failed in optimistic list
+        setMessagesByChat((prev) => ({
+          ...prev,
+          [chatId]: (prev[chatId] || []).map((m) =>
+            m.messageId === messageId ? { ...m, status: 'failed' } : m
+          ),
+        }));
+        showToast('Message delivery failed. Tap Retry to send again.');
         try {
           handleFirestoreError(err, OperationType.CREATE, `chats/${chatId}/messages/${messageId}`);
         } catch {
           // Handled
         }
       }
+    }
+  };
+
+  const handleRetryMessage = (chatId: string, failedMsg: ChatMessage) => {
+    setMessagesByChat((prev) => ({
+      ...prev,
+      [chatId]: (prev[chatId] || []).filter((m) => m.messageId !== failedMsg.messageId),
+    }));
+    handleSendMessage(
+      chatId,
+      failedMsg.text,
+      failedMsg.mediaUrl,
+      failedMsg.mediaType,
+      failedMsg.replyToMessageId,
+      failedMsg.replyToText
+    );
+  };
+
+  const handleCreateGroup = async (name: string, description: string, memberUids: string[]) => {
+    const groupId = `grp_${Date.now()}`;
+    const allMembers = Array.from(new Set([currentUser.uid, ...memberUids]));
+    const memberNames: Record<string, string> = {
+      [currentUser.uid]: currentUser.displayName,
+    };
+    allMembers.forEach((uid) => {
+      const u = directoryUsers.find((user) => user.uid === uid);
+      if (u) memberNames[uid] = u.displayName;
+    });
+
+    const newGroup: GroupChat = {
+      groupId,
+      name,
+      description,
+      avatarUrl: `https://api.dicebear.com/7.x/identicon/svg?seed=${groupId}`,
+      creatorUid: currentUser.uid,
+      adminUids: [currentUser.uid],
+      memberUids: allMembers,
+      memberNames,
+      lastMessageText: `${currentUser.displayName} created group "${name}"`,
+      lastMessageSenderId: currentUser.uid,
+      lastMessageSenderName: currentUser.displayName,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    };
+
+    setGroups((prev) => [newGroup, ...prev]);
+
+    if (firebaseUser) {
+      await setDoc(doc(db, 'groups', groupId), {
+        ...newGroup,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
+    showToast(`Group "${name}" created!`);
+  };
+
+  const handleRevokeDevice = async (tokenId: string) => {
+    setRegisteredDevices((prev) => prev.filter((d) => d.tokenId !== tokenId));
+    if (firebaseUser) {
+      await deleteDoc(doc(db, 'device_tokens', tokenId));
+    }
+  };
+
+  const handleSignOutAllOtherDevices = async () => {
+    const currentDeviceId = localStorage.getItem('connectx_device_id');
+    const toDelete = registeredDevices.filter(
+      (d) => !currentDeviceId || !d.tokenId.includes(currentDeviceId)
+    );
+    setRegisteredDevices((prev) =>
+      prev.filter((d) => Boolean(currentDeviceId) && d.tokenId.includes(currentDeviceId || ''))
+    );
+    if (firebaseUser) {
+      await Promise.all(
+        toDelete.map((d) => deleteDoc(doc(db, 'device_tokens', d.tokenId)).catch(() => {}))
+      );
     }
   };
 
@@ -1759,7 +1966,11 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen flex flex-col pb-16 lg:pb-0 bg-[#f0f2f5] text-black transition-colors">
+    <div
+      className={`min-h-screen flex flex-col pb-16 lg:pb-0 ${
+        darkMode ? 'dark bg-[#0b141a] text-slate-100' : 'bg-[#f0f2f5] text-black'
+      } transition-colors`}
+    >
       {/* Offline Mode Indicator */}
       {!isOnline && (
         <div className="bg-amber-300 text-black text-xs font-bold px-4 py-1.5 flex items-center justify-center gap-2 border-b border-amber-400">
@@ -1845,10 +2056,30 @@ export default function App() {
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => setShowNotificationsDrawer(true)}
-            className="px-3.5 py-1.5 text-xs font-bold text-black bg-[#25d366] rounded-lg hover:bg-[#1ebe5d] transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer"
+            onClick={() => setDarkMode(!darkMode)}
+            aria-label={darkMode ? 'Switch to daylight theme' : 'Switch to dark theme'}
+            className="p-1.5 rounded-lg border border-slate-300 text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer"
+            title={darkMode ? 'Light Theme' : 'Dark Theme'}
           >
-            <Bell className="w-3.5 h-3.5 text-black" />
+            {darkMode ? <Sun className="w-4 h-4 text-amber-500" /> : <Moon className="w-4 h-4 text-slate-700" />}
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowSecuritySettings(true)}
+            className="px-3 py-1.5 text-xs font-bold text-slate-800 bg-white border border-slate-300 rounded-lg hover:bg-slate-100 transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer"
+            title="Account Security, Devices & E2EE Keys"
+          >
+            <ShieldCheck className="w-3.5 h-3.5 text-[#008C5A]" />
+            <span className="hidden sm:inline">Security</span>
+          </button>
+
+          <button
+            type="button"
+            onClick={() => setShowNotificationsDrawer(true)}
+            className="px-3.5 py-1.5 text-xs font-bold text-white bg-[#008C5A] hover:bg-[#006B46] rounded-lg shadow-xs transition-colors whitespace-nowrap shrink-0 flex items-center gap-1.5 cursor-pointer"
+          >
+            <Bell className="w-3.5 h-3.5" />
             <span>
               Alerts {unreadNotificationsCount > 0 ? `(${unreadNotificationsCount})` : ''}
             </span>
@@ -1860,9 +2091,9 @@ export default function App() {
       {toastBanner && (
         <div
           role="status"
-          className="fixed bottom-18 lg:bottom-6 right-4 z-40 px-4 py-2.5 rounded-xl bg-[#25d366] border border-emerald-600 text-black text-xs font-bold shadow-lg flex items-center gap-2"
+          className="fixed bottom-18 lg:bottom-6 right-4 z-40 px-4 py-2.5 rounded-xl bg-[#008C5A] border border-[#006B46] text-white text-xs font-bold shadow-lg flex items-center gap-2"
         >
-          <Check className="w-4 h-4 text-black shrink-0" />
+          <Check className="w-4 h-4 text-white shrink-0" />
           <span>{toastBanner}</span>
         </div>
       )}
@@ -1889,6 +2120,12 @@ export default function App() {
             onNavigateToFriends={() => setActiveTab('discover')}
             mutedChatIds={privateSettings.mutedChatIds || []}
             onToggleMuteChat={handleToggleMuteChat}
+            groups={groups}
+            activeGroupId={activeGroupId}
+            onSelectGroup={setActiveGroupId}
+            onOpenCreateGroup={() => setShowCreateGroupModal(true)}
+            onRetryMessage={handleRetryMessage}
+            isE2EEActive={true}
           />
         )}
 
@@ -1965,6 +2202,7 @@ export default function App() {
             onDeleteAccount={handleDeleteAccount}
             onLogout={handleLogout}
             onOpenNotificationSettings={() => setShowNotificationSettings(true)}
+            onOpenSecuritySettings={() => setShowSecuritySettings(true)}
           />
         )}
       </main>
@@ -2078,6 +2316,27 @@ export default function App() {
         onUpdatePrivateSettings={handleUpdatePrivateSettings}
         onUnmuteChat={handleUnmuteChat}
         onClose={() => setShowNotificationSettings(false)}
+      />
+
+      {/* Account Security, Device Management & E2EE Keys Modal */}
+      <SecuritySettingsModal
+        isOpen={showSecuritySettings}
+        currentUserId={currentUser.uid}
+        devices={registeredDevices}
+        safetyNumber={safetyNumber}
+        onRevokeDevice={handleRevokeDevice}
+        onSignOutAllOtherDevices={handleSignOutAllOtherDevices}
+        onDeleteAccount={handleDeleteAccount}
+        onClose={() => setShowSecuritySettings(false)}
+      />
+
+      {/* Group Creation Modal */}
+      <CreateGroupModal
+        isOpen={showCreateGroupModal}
+        friends={directoryUsers.filter((u) => friendUids.has(u.uid))}
+        currentUserId={currentUser.uid}
+        onCreateGroup={handleCreateGroup}
+        onClose={() => setShowCreateGroupModal(false)}
       />
 
       {/* Pre-Permission Educational Modal */}

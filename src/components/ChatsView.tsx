@@ -21,12 +21,18 @@ import {
   Lock,
   Bell,
   BellOff,
+  Users,
+  ShieldCheck,
+  RotateCw,
+  AlertCircle,
 } from 'lucide-react';
 import {
   CallLogEntry,
   CallType,
   ChatConversation,
   ChatMessage,
+  GroupChat,
+  GroupMessage,
   UserPublicProfile,
 } from '../types/connectx';
 import { formatCallDuration, validateMessagePayload } from '../utils/connectxRules';
@@ -67,9 +73,15 @@ interface ChatsViewProps {
   onNavigateToFriends: () => void;
   mutedChatIds?: string[];
   onToggleMuteChat?: (chatId: string) => void;
+  groups?: GroupChat[];
+  activeGroupId?: string | null;
+  onSelectGroup?: (groupId: string | null) => void;
+  onOpenCreateGroup?: () => void;
+  onRetryMessage?: (chatId: string, message: ChatMessage) => void;
+  isE2EEActive?: boolean;
 }
 
-type SidebarFilter = 'all' | 'unread' | 'calls';
+type SidebarFilter = 'all' | 'unread' | 'groups' | 'calls';
 
 export const ChatsView: React.FC<ChatsViewProps> = ({
   currentUser,
@@ -88,6 +100,12 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
   onNavigateToFriends,
   mutedChatIds = [],
   onToggleMuteChat,
+  groups = [],
+  activeGroupId = null,
+  onSelectGroup,
+  onOpenCreateGroup,
+  onRetryMessage,
+  isE2EEActive = true,
 }) => {
   const [sidebarFilter, setSidebarFilter] = useState<SidebarFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -299,48 +317,128 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
             />
           </div>
 
-          {/* WhatsApp Filter Bar: All | Unread | Calls */}
-          <div className="flex items-center gap-1.5 pt-0.5">
-            <button
-              type="button"
-              onClick={() => setSidebarFilter('all')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer text-black ${
-                sidebarFilter === 'all'
-                  ? 'bg-[#25d366]'
-                  : 'bg-white border border-slate-300 hover:bg-slate-100'
-              }`}
-            >
-              All Chats
-            </button>
-            <button
-              type="button"
-              onClick={() => setSidebarFilter('unread')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer text-black ${
-                sidebarFilter === 'unread'
-                  ? 'bg-[#25d366]'
-                  : 'bg-white border border-slate-300 hover:bg-slate-100'
-              }`}
-            >
-              Unread
-            </button>
-            <button
-              type="button"
-              onClick={() => setSidebarFilter('calls')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1.5 cursor-pointer text-black ${
-                sidebarFilter === 'calls'
-                  ? 'bg-[#25d366]'
-                  : 'bg-white border border-slate-300 hover:bg-slate-100'
-              }`}
-            >
-              <Phone className="w-3 h-3 text-black" />
-              <span>Calls ({callLogs.length})</span>
-            </button>
+          {/* WhatsApp Filter Bar: All | Unread | Groups | Calls */}
+          <div className="flex items-center justify-between gap-1 pt-0.5 overflow-x-auto scrollbar-none">
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setSidebarFilter('all')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer text-black ${
+                  sidebarFilter === 'all'
+                    ? 'bg-[#008C5A] text-white'
+                    : 'bg-white border border-slate-300 hover:bg-slate-100'
+                }`}
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => setSidebarFilter('unread')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors cursor-pointer text-black ${
+                  sidebarFilter === 'unread'
+                    ? 'bg-[#008C5A] text-white'
+                    : 'bg-white border border-slate-300 hover:bg-slate-100'
+                }`}
+              >
+                Unread
+              </button>
+              <button
+                type="button"
+                onClick={() => setSidebarFilter('groups')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer text-black ${
+                  sidebarFilter === 'groups'
+                    ? 'bg-[#008C5A] text-white'
+                    : 'bg-white border border-slate-300 hover:bg-slate-100'
+                }`}
+              >
+                <Users className="w-3 h-3" />
+                <span>Groups ({groups.length})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setSidebarFilter('calls')}
+                className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-colors flex items-center gap-1 cursor-pointer text-black ${
+                  sidebarFilter === 'calls'
+                    ? 'bg-[#008C5A] text-white'
+                    : 'bg-white border border-slate-300 hover:bg-slate-100'
+                }`}
+              >
+                <Phone className="w-3 h-3 text-black" />
+                <span>Calls ({callLogs.length})</span>
+              </button>
+            </div>
+
+            {onOpenCreateGroup && (
+              <button
+                type="button"
+                onClick={onOpenCreateGroup}
+                className="px-2.5 py-1.5 rounded-lg bg-[#008C5A]/15 hover:bg-[#008C5A]/25 text-[#006B46] text-xs font-bold transition-colors flex items-center gap-1 shrink-0 cursor-pointer"
+                title="Create a new group"
+              >
+                <Users className="w-3.5 h-3.5" />
+                <span className="hidden sm:inline">+ Group</span>
+              </button>
+            )}
           </div>
         </div>
 
         {/* Sidebar Scroll Content */}
         <div className="flex-1 overflow-y-auto divide-y divide-slate-200">
-          {sidebarFilter === 'calls' ? (
+          {sidebarFilter === 'groups' ? (
+            groups.length === 0 ? (
+              <div className="p-8 text-center space-y-2 text-black">
+                <Users className="w-8 h-8 text-slate-400 mx-auto mb-1" />
+                <p className="text-sm font-bold text-black">No Group Chats Yet</p>
+                <p className="text-xs text-slate-500">
+                  Create a shared space for team projects or group discussions.
+                </p>
+                {onOpenCreateGroup && (
+                  <button
+                    type="button"
+                    onClick={onOpenCreateGroup}
+                    className="mt-2 px-4 py-2 rounded-xl bg-[#008C5A] hover:bg-[#006B46] text-white text-xs font-bold transition-colors cursor-pointer"
+                  >
+                    + Create Group
+                  </button>
+                )}
+              </div>
+            ) : (
+              groups.map((grp) => {
+                const isSelected = activeGroupId === grp.groupId;
+                return (
+                  <button
+                    key={grp.groupId}
+                    type="button"
+                    onClick={() => {
+                      if (onSelectGroup) onSelectGroup(grp.groupId);
+                      onSelectChat(null);
+                    }}
+                    className={`w-full text-left p-4 transition-colors flex items-start gap-3.5 cursor-pointer text-black ${
+                      isSelected ? 'bg-emerald-50' : 'hover:bg-[#f0f2f5]'
+                    }`}
+                  >
+                    <div className="w-11 h-11 rounded-full bg-emerald-100 text-[#006B46] flex items-center justify-center font-bold text-sm shrink-0">
+                      <Users className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-bold text-black truncate">{grp.name}</span>
+                        <span className="text-[11px] font-medium text-slate-500 tabular-nums">
+                          {formatTime(grp.updatedAt)}
+                        </span>
+                      </div>
+                      <div className="text-xs text-slate-500 font-medium truncate mt-0.5">
+                        {grp.memberUids.length} members · Admin: {grp.creatorUid === currentUser.uid ? 'You' : 'Admin'}
+                      </div>
+                      <p className="text-xs text-slate-600 truncate mt-1">
+                        {grp.lastMessageText || 'Group created'}
+                      </p>
+                    </div>
+                  </button>
+                );
+              })
+            )
+          ) : sidebarFilter === 'calls' ? (
             callLogs.length === 0 ? (
               <div className="p-8 text-center space-y-2 text-black">
                 <p className="text-sm font-bold text-black">No recent calls</p>
@@ -543,6 +641,17 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
               </div>
 
               <div className="flex items-center gap-1.5 sm:gap-2 shrink-0">
+                {/* E2EE Active Indicator */}
+                {isE2EEActive && (
+                  <div
+                    className="hidden lg:inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-[#008C5A]/10 text-[#006B46] border border-[#008C5A]/25 text-[11px] font-bold shrink-0"
+                    title="End-to-End Encrypted (ECDH Curve P-256 + AES-256-GCM)"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-[#008C5A]" />
+                    <span>E2EE Active</span>
+                  </div>
+                )}
+
                 {/* Voice Call Button */}
                 <button
                   type="button"
@@ -730,18 +839,28 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                           {msg.isDeleted ? 'This message was deleted by sender.' : msg.text}
                         </p>
 
-                        <div className="flex items-center justify-end gap-2 text-[11px] font-medium tabular-nums text-black">
+                        <div className="flex items-center justify-end gap-1.5 text-[11px] font-medium tabular-nums text-black">
+                          {msg.isEncrypted && (
+                            <Lock className="w-3 h-3 text-[#008C5A]" title="End-to-End Encrypted message" />
+                          )}
                           <span>{formatTime(msg.createdAt)}</span>
-                          {isMine && currentUser.privacyShowReadReceipts && (
+                          {isMine && (
                             <span className="inline-flex items-center gap-0.5" title={msg.status}>
-                              {msg.status === 'read' ? (
-                                <CheckCheck className="w-3.5 h-3.5 text-black" />
+                              {msg.status === 'sending' ? (
+                                <Clock className="w-3.5 h-3.5 text-slate-400 animate-spin" />
+                              ) : msg.status === 'failed' ? (
+                                <span className="inline-flex items-center gap-0.5 text-rose-600 font-bold">
+                                  <AlertCircle className="w-3.5 h-3.5" />
+                                  <span>Failed</span>
+                                </span>
+                              ) : msg.status === 'read' && currentUser.privacyShowReadReceipts ? (
+                                <CheckCheck className="w-3.5 h-3.5 text-[#008C5A]" />
                               ) : msg.status === 'delivered' ? (
-                                <CheckCheck className="w-3.5 h-3.5 text-black" />
+                                <CheckCheck className="w-3.5 h-3.5 text-slate-500" />
                               ) : (
-                                <Check className="w-3.5 h-3.5 text-black" />
+                                <Check className="w-3.5 h-3.5 text-slate-400" />
                               )}
-                              <span>{msg.status}</span>
+                              {msg.status !== 'failed' && <span>{msg.status}</span>}
                             </span>
                           )}
                         </div>
@@ -750,6 +869,16 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                       {/* Message Action Bar */}
                       {!msg.isDeleted && (
                         <div className="flex items-center gap-2.5 mt-1 px-1 text-[11px] font-semibold text-black">
+                          {msg.status === 'failed' && onRetryMessage && (
+                            <button
+                              type="button"
+                              onClick={() => onRetryMessage(activeChat.chatId, msg)}
+                              className="hover:underline flex items-center gap-1 cursor-pointer text-rose-600 font-bold"
+                            >
+                              <RotateCw className="w-3 h-3" />
+                              <span>Retry Send</span>
+                            </button>
+                          )}
                           <button
                             type="button"
                             onClick={() => setReplyingTo(msg)}

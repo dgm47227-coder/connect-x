@@ -441,7 +441,8 @@ service cloud.firestore {
           'messageId', 'chatId', 'senderId', 'recipientId',
           'text', 'mediaUrl', 'mediaType',
           'replyToMessageId', 'replyToText',
-          'status', 'isDeleted', 'createdAt', 'updatedAt'
+          'status', 'isDeleted', 'createdAt', 'updatedAt',
+          'isEncrypted', 'ciphertext', 'iv', 'keyId'
         ]) &&
         isValidId(data.messageId) &&
         isValidId(data.chatId) &&
@@ -449,13 +450,17 @@ service cloud.firestore {
         isValidId(data.recipientId) &&
         data.senderId != data.recipientId &&
         (data.senderId == request.auth.uid || data.recipientId == request.auth.uid) &&
-        data.text is string && data.text.size() <= 2000 &&
+        data.text is string && data.text.size() <= 4000 &&
         data.mediaUrl is string && data.mediaUrl.size() <= 50000 &&
         (data.mediaType == 'none' || data.mediaType == 'image') &&
         data.replyToMessageId is string && data.replyToMessageId.size() <= 128 &&
         data.replyToText is string && data.replyToText.size() <= 300 &&
-        (data.status == 'sent' || data.status == 'delivered' || data.status == 'read') &&
+        (data.status == 'sent' || data.status == 'delivered' || data.status == 'read' || data.status == 'sending') &&
         data.isDeleted is bool &&
+        (!('isEncrypted' in data) || data.isEncrypted is bool) &&
+        (!('ciphertext' in data) || (data.ciphertext is string && data.ciphertext.size() <= 10000)) &&
+        (!('iv' in data) || (data.iv is string && data.iv.size() <= 64)) &&
+        (!('keyId' in data) || (data.keyId is string && data.keyId.size() <= 128)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
       }
@@ -787,6 +792,112 @@ service cloud.firestore {
         incoming().updatedAt == request.time;
 
       allow delete: if isVerifiedUser() && isValidId(tokenId) && existing().uid == request.auth.uid;
+    }
+
+    // ---------------------------------------------------------
+    // 14. UserKeyRecord (/user_keys/{userId}) - E2EE Public Keys
+    // ---------------------------------------------------------
+    function isValidUserKey(data) {
+      return data.keys().hasAll(['uid', 'publicKeyJwk', 'safetyNumber', 'algorithm', 'createdAt', 'updatedAt']) &&
+      data.keys().hasOnly(['uid', 'publicKeyJwk', 'safetyNumber', 'algorithm', 'createdAt', 'updatedAt']) &&
+      isValidId(data.uid) &&
+      data.uid == request.auth.uid &&
+      data.publicKeyJwk is string && data.publicKeyJwk.size() >= 10 && data.publicKeyJwk.size() <= 4096 &&
+      data.safetyNumber is string && data.safetyNumber.size() >= 8 && data.safetyNumber.size() <= 128 &&
+      data.algorithm is string && data.algorithm.size() <= 64 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    match /user_keys/{userId} {
+      allow get: if isSignedIn() && isValidId(userId);
+      allow list: if isSignedIn();
+
+      allow create: if isVerifiedUser() &&
+        isValidId(userId) &&
+        userId == request.auth.uid &&
+        isValidUserKey(incoming()) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(userId) &&
+        userId == request.auth.uid &&
+        isValidUserKey(incoming()) &&
+        incoming().uid == existing().uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time;
+
+      allow delete: if isVerifiedUser() && isValidId(userId) && userId == request.auth.uid;
+    }
+
+    // ---------------------------------------------------------
+    // 15. GroupChat (/groups/{groupId})
+    // ---------------------------------------------------------
+    function isValidGroup(data) {
+      return data.keys().hasAll([
+        'groupId', 'name', 'description', 'avatarUrl', 'creatorUid',
+        'adminUids', 'memberUids', 'memberNames', 'lastMessageText',
+        'lastMessageSenderId', 'lastMessageSenderName', 'createdAt', 'updatedAt'
+      ]) &&
+      data.keys().hasOnly([
+        'groupId', 'name', 'description', 'avatarUrl', 'creatorUid',
+        'adminUids', 'memberUids', 'memberNames', 'lastMessageText',
+        'lastMessageSenderId', 'lastMessageSenderName', 'isEncrypted', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.groupId) &&
+      data.name is string && data.name.size() >= 1 && data.name.size() <= 60 &&
+      data.description is string && data.description.size() <= 300 &&
+      data.avatarUrl is string && data.avatarUrl.size() <= 2000 &&
+      isValidId(data.creatorUid) &&
+      data.adminUids is list && data.adminUids.size() >= 1 && data.adminUids.size() <= 100 &&
+      data.memberUids is list && data.memberUids.size() >= 1 && data.memberUids.size() <= 200 &&
+      data.lastMessageText is string && data.lastMessageText.size() <= 1000 &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    match /groups/{groupId} {
+      allow get: if isSignedIn() && isValidId(groupId) &&
+        (request.auth.uid in resource.data.memberUids);
+      allow list: if isSignedIn() && (request.auth.uid in resource.data.memberUids);
+
+      allow create: if isVerifiedUser() &&
+        isValidId(groupId) &&
+        isValidGroup(incoming()) &&
+        incoming().creatorUid == request.auth.uid &&
+        (request.auth.uid in incoming().adminUids) &&
+        (request.auth.uid in incoming().memberUids) &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(groupId) &&
+        isValidGroup(incoming()) &&
+        (request.auth.uid in existing().memberUids) &&
+        incoming().groupId == existing().groupId &&
+        incoming().creatorUid == existing().creatorUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time;
+
+      allow delete: if isVerifiedUser() && isValidId(groupId) &&
+        existing().creatorUid == request.auth.uid;
+
+      match /messages/{messageId} {
+        allow get, list: if isSignedIn() &&
+          isValidId(groupId) && isValidId(messageId) &&
+          (request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.memberUids);
+
+        allow create: if isVerifiedUser() &&
+          isValidId(groupId) && isValidId(messageId) &&
+          incoming().senderId == request.auth.uid &&
+          incoming().createdAt == request.time &&
+          (request.auth.uid in get(/databases/$(database)/documents/groups/$(groupId)).data.memberUids);
+
+        allow update, delete: if isVerifiedUser() &&
+          (resource.data.senderId == request.auth.uid ||
+           request.auth.uid == get(/databases/$(database)/documents/groups/$(groupId)).data.creatorUid);
+      }
     }
   }
 }

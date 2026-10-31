@@ -41,6 +41,7 @@ interface ProfileViewProps {
   onDeleteAccount: () => void;
   onLogout: () => void;
   onOpenNotificationSettings?: () => void;
+  onOpenSecuritySettings?: () => void;
 }
 
 const AVATAR_PRESETS = [
@@ -64,6 +65,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onDeleteAccount,
   onLogout,
   onOpenNotificationSettings,
+  onOpenSecuritySettings,
 }) => {
   const [displayName, setDisplayName] = useState(currentUser.displayName);
   const [username, setUsername] = useState(currentUser.username);
@@ -407,11 +409,25 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             <button
               type="button"
               onClick={onOpenNotificationSettings}
-              className="w-full p-3 rounded-xl bg-[#25d366]/15 hover:bg-[#25d366]/25 border border-emerald-300 text-black text-xs font-bold flex items-center justify-between transition-colors cursor-pointer"
+              className="w-full p-3 rounded-xl bg-[#008C5A]/10 hover:bg-[#008C5A]/20 border border-[#008C5A]/25 text-black text-xs font-bold flex items-center justify-between transition-colors cursor-pointer"
             >
               <div className="flex items-center gap-2">
-                <Settings className="w-4 h-4 text-emerald-800" />
+                <Settings className="w-4 h-4 text-[#006B46]" />
                 <span>Open Advanced Notification & Alert Settings</span>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-500" />
+            </button>
+          )}
+
+          {onOpenSecuritySettings && (
+            <button
+              type="button"
+              onClick={onOpenSecuritySettings}
+              className="w-full p-3 rounded-xl bg-[#008C5A]/15 hover:bg-[#008C5A]/25 border border-[#008C5A]/35 text-black text-xs font-bold flex items-center justify-between transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                <ShieldCheck className="w-4 h-4 text-[#006B46]" />
+                <span>Account Security, Device Management & E2EE Keys</span>
               </div>
               <ChevronRight className="w-4 h-4 text-slate-500" />
             </button>
