@@ -1126,21 +1126,22 @@ export default function App() {
     }
 
     if (firebaseUser) {
+      // 1. Best-effort ensure chat document exists in Firestore before writing message
       try {
-        // Ensure chat document exists in Firestore before writing message to subcollection
-        const chatDocRef = doc(db, 'chats', chatId);
-        const chatSnap = await getDoc(chatDocRef);
-        if (!chatSnap.exists()) {
-          await setDoc(chatDocRef, {
+        await setDoc(
+          doc(db, 'chats', chatId),
+          {
             chatId,
             participant1Uid: targetChat.participant1Uid,
             participant2Uid: targetChat.participant2Uid,
-            participant1Name: targetChat.participant1Name,
-            participant2Name: targetChat.participant2Name,
-            participant1Username: targetChat.participant1Username,
-            participant2Username: targetChat.participant2Username,
-            participant1Avatar: targetChat.participant1Avatar || '',
-            participant2Avatar: targetChat.participant2Avatar || '',
+            participant1Name: targetChat.participant1Name.slice(0, 60),
+            participant2Name: targetChat.participant2Name.slice(0, 60),
+            participant1Username:
+              targetChat.participant1Username.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 30) || 'user_1',
+            participant2Username:
+              targetChat.participant2Username.toLowerCase().replace(/[^a-z0-9_]/g, '').slice(0, 30) || 'user_2',
+            participant1Avatar: (targetChat.participant1Avatar || '').slice(0, 2000),
+            participant2Avatar: (targetChat.participant2Avatar || '').slice(0, 2000),
             lastMessageText: previewSummary,
             lastMessageSenderId: currentUser.uid,
             lastMessageStatus: 'delivered',
@@ -1149,14 +1150,29 @@ export default function App() {
             typingUid: '',
             createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
-          });
-        }
+          },
+          { merge: true }
+        );
+      } catch (chatEnsureErr) {
+        // If parent chat doc already exists or merge is restricted by rules, proceed to message creation
+        console.warn('Chat document ensure notice:', chatEnsureErr);
+      }
 
+      // 2. Write the message document to /chats/{chatId}/messages/{messageId}
+      try {
         const msgPayload: Record<string, unknown> = {
-          ...newMsg,
+          messageId,
+          chatId,
+          senderId: currentUser.uid,
+          recipientId,
           text: payloadText,
-          isEncrypted: encResult.isEncrypted,
+          mediaUrl: mediaUrl || '',
+          mediaType: mediaType || 'none',
+          replyToMessageId: replyToMessageId || '',
+          replyToText: replyToText || '',
           status: 'delivered',
+          isDeleted: false,
+          isEncrypted: Boolean(encResult.isEncrypted),
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
         };
@@ -1168,7 +1184,7 @@ export default function App() {
 
         await setDoc(doc(db, 'chats', chatId, 'messages', messageId), msgPayload);
 
-        // Update local optimistic message state to delivered
+        // Update local optimistic message state to delivered immediately upon write success
         setMessagesByChat((prev) => ({
           ...prev,
           [chatId]: (prev[chatId] || []).map((m) =>
@@ -1178,7 +1194,8 @@ export default function App() {
           ),
         }));
 
-        await updateDoc(doc(db, 'chats', chatId), {
+        // 3. Update chat summary metadata (non-blocking)
+        updateDoc(doc(db, 'chats', chatId), {
           lastMessageText: previewSummary,
           lastMessageSenderId: currentUser.uid,
           lastMessageStatus: 'delivered',
@@ -1186,10 +1203,11 @@ export default function App() {
           unreadCount2: nextUnread2,
           typingUid: '',
           updatedAt: serverTimestamp(),
-        });
+        }).catch((err) => console.warn('Chat metadata update warning:', err));
 
+        // 4. Dispatch notification (non-blocking)
         const notifId = `notif_msg_${Date.now()}`;
-        await setDoc(doc(db, 'notifications', notifId), {
+        setDoc(doc(db, 'notifications', notifId), {
           notificationId: notifId,
           recipientUid: recipientId,
           actorUid: currentUser.uid,
@@ -1202,14 +1220,15 @@ export default function App() {
           targetId: chatId,
         }).catch(() => {});
       } catch (err) {
-        // Mark message as failed in optimistic list
+        console.error('Firestore message write failure:', err);
+        const errMsg = err instanceof Error ? err.message : String(err);
         setMessagesByChat((prev) => ({
           ...prev,
           [chatId]: (prev[chatId] || []).map((m) =>
             m.messageId === messageId ? { ...m, status: 'failed' } : m
           ),
         }));
-        showToast('Message delivery failed. Tap Retry to send again.');
+        showToast(`Message send failed: ${errMsg}`);
         try {
           handleFirestoreError(err, OperationType.CREATE, `chats/${chatId}/messages/${messageId}`);
         } catch {

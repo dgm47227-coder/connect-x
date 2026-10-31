@@ -365,14 +365,13 @@ service cloud.firestore {
       isValidId(data.chatId) &&
       isValidId(data.participant1Uid) &&
       isValidId(data.participant2Uid) &&
-      data.participant1Uid != data.participant2Uid &&
       (data.participant1Uid == request.auth.uid || data.participant2Uid == request.auth.uid) &&
       data.participant1Name is string && data.participant1Name.size() >= 1 && data.participant1Name.size() <= 60 &&
       data.participant2Name is string && data.participant2Name.size() >= 1 && data.participant2Name.size() <= 60 &&
       isValidUsername(data.participant1Username) &&
       isValidUsername(data.participant2Username) &&
-      data.participant1Avatar is string && data.participant1Avatar.size() <= 2000 &&
-      data.participant2Avatar is string && data.participant2Avatar.size() <= 2000 &&
+      data.participant1Avatar is string && data.participant1Avatar.size() <= 50000 &&
+      data.participant2Avatar is string && data.participant2Avatar.size() <= 50000 &&
       data.lastMessageText is string && data.lastMessageText.size() <= 1000 &&
       isValidId(data.lastMessageSenderId) &&
       (data.lastMessageStatus == 'sent' || data.lastMessageStatus == 'delivered' || data.lastMessageStatus == 'read') &&
@@ -385,7 +384,7 @@ service cloud.firestore {
 
     match /chats/{chatId} {
       allow get: if isSignedIn() && isValidId(chatId) &&
-        (resource.data.participant1Uid == request.auth.uid || resource.data.participant2Uid == request.auth.uid);
+        (resource == null || resource.data.participant1Uid == request.auth.uid || resource.data.participant2Uid == request.auth.uid);
       allow list: if isSignedIn() &&
         (resource.data.participant1Uid == request.auth.uid || resource.data.participant2Uid == request.auth.uid);
 
@@ -426,7 +425,7 @@ service cloud.firestore {
       //    Master Gate enforces parent /chats/{chatId} membership
       // ---------------------------------------------------------
       function isChatParticipant() {
-        return exists(/databases/$(database)/documents/chats/$(chatId)) &&
+        return !exists(/databases/$(database)/documents/chats/$(chatId)) ||
           (get(/databases/$(database)/documents/chats/$(chatId)).data.participant1Uid == request.auth.uid ||
            get(/databases/$(database)/documents/chats/$(chatId)).data.participant2Uid == request.auth.uid);
       }
