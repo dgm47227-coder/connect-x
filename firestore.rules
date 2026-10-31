@@ -426,8 +426,9 @@ service cloud.firestore {
       //    Master Gate enforces parent /chats/{chatId} membership
       // ---------------------------------------------------------
       function isChatParticipant() {
-        let chat = get(/databases/$(database)/documents/chats/$(chatId)).data;
-        return chat.participant1Uid == request.auth.uid || chat.participant2Uid == request.auth.uid;
+        return exists(/databases/$(database)/documents/chats/$(chatId)) &&
+          (get(/databases/$(database)/documents/chats/$(chatId)).data.participant1Uid == request.auth.uid ||
+           get(/databases/$(database)/documents/chats/$(chatId)).data.participant2Uid == request.auth.uid);
       }
 
       function isValidChatMessage(data) {
@@ -448,7 +449,6 @@ service cloud.firestore {
         isValidId(data.chatId) &&
         isValidId(data.senderId) &&
         isValidId(data.recipientId) &&
-        data.senderId != data.recipientId &&
         (data.senderId == request.auth.uid || data.recipientId == request.auth.uid) &&
         data.text is string && data.text.size() <= 4000 &&
         data.mediaUrl is string && data.mediaUrl.size() <= 50000 &&
@@ -459,9 +459,9 @@ service cloud.firestore {
         data.isDeleted is bool &&
         (!('isEdited' in data) || data.isEdited is bool) &&
         (!('isEncrypted' in data) || data.isEncrypted is bool) &&
-        (!('ciphertext' in data) || (data.ciphertext is string && data.ciphertext.size() <= 10000)) &&
-        (!('iv' in data) || (data.iv is string && data.iv.size() <= 64)) &&
-        (!('keyId' in data) || (data.keyId is string && data.keyId.size() <= 128)) &&
+        (!('ciphertext' in data) || data.ciphertext == null || (data.ciphertext is string && data.ciphertext.size() <= 10000)) &&
+        (!('iv' in data) || data.iv == null || (data.iv is string && data.iv.size() <= 64)) &&
+        (!('keyId' in data) || data.keyId == null || (data.keyId is string && data.keyId.size() <= 128)) &&
         data.createdAt is timestamp &&
         data.updatedAt is timestamp;
       }
@@ -913,10 +913,9 @@ service cloud.firestore {
         'calleeName', 'callType', 'status', 'createdAt', 'updatedAt'
       ]) &&
       isValidId(data.callId) &&
-      isValidId(data.chatId) &&
+      (data.chatId is string && data.chatId.size() <= 128) &&
       isValidId(data.callerUid) &&
       isValidId(data.calleeUid) &&
-      data.callerUid != data.calleeUid &&
       (data.callType == 'audio' || data.callType == 'video') &&
       (data.status == 'ringing' || data.status == 'connected' || data.status == 'ended' || data.status == 'rejected' || data.status == 'busy' || data.status == 'missed') &&
       data.createdAt is timestamp &&
@@ -952,17 +951,21 @@ service cloud.firestore {
 
       match /callerCandidates/{candId} {
         allow read: if isSignedIn() &&
+          exists(/databases/$(database)/documents/calls/$(callId)) &&
           (get(/databases/$(database)/documents/calls/$(callId)).data.callerUid == request.auth.uid ||
            get(/databases/$(database)/documents/calls/$(callId)).data.calleeUid == request.auth.uid);
         allow write: if isVerifiedUser() &&
+          exists(/databases/$(database)/documents/calls/$(callId)) &&
           get(/databases/$(database)/documents/calls/$(callId)).data.callerUid == request.auth.uid;
       }
 
       match /calleeCandidates/{candId} {
         allow read: if isSignedIn() &&
+          exists(/databases/$(database)/documents/calls/$(callId)) &&
           (get(/databases/$(database)/documents/calls/$(callId)).data.callerUid == request.auth.uid ||
            get(/databases/$(database)/documents/calls/$(callId)).data.calleeUid == request.auth.uid);
         allow write: if isVerifiedUser() &&
+          exists(/databases/$(database)/documents/calls/$(callId)) &&
           get(/databases/$(database)/documents/calls/$(callId)).data.calleeUid == request.auth.uid;
       }
     }

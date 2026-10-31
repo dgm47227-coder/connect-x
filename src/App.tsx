@@ -1127,16 +1127,46 @@ export default function App() {
 
     if (firebaseUser) {
       try {
-        await setDoc(doc(db, 'chats', chatId, 'messages', messageId), {
+        // Ensure chat document exists in Firestore before writing message to subcollection
+        const chatDocRef = doc(db, 'chats', chatId);
+        const chatSnap = await getDoc(chatDocRef);
+        if (!chatSnap.exists()) {
+          await setDoc(chatDocRef, {
+            chatId,
+            participant1Uid: targetChat.participant1Uid,
+            participant2Uid: targetChat.participant2Uid,
+            participant1Name: targetChat.participant1Name,
+            participant2Name: targetChat.participant2Name,
+            participant1Username: targetChat.participant1Username,
+            participant2Username: targetChat.participant2Username,
+            participant1Avatar: targetChat.participant1Avatar || '',
+            participant2Avatar: targetChat.participant2Avatar || '',
+            lastMessageText: previewSummary,
+            lastMessageSenderId: currentUser.uid,
+            lastMessageStatus: 'delivered',
+            unreadCount1: nextUnread1,
+            unreadCount2: nextUnread2,
+            typingUid: '',
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+          });
+        }
+
+        const msgPayload: Record<string, unknown> = {
           ...newMsg,
           text: payloadText,
           isEncrypted: encResult.isEncrypted,
-          ciphertext: encResult.isEncrypted ? encResult.ciphertext : null,
-          iv: encResult.isEncrypted ? encResult.iv : null,
           status: 'delivered',
           createdAt: serverTimestamp(),
           updatedAt: serverTimestamp(),
-        });
+        };
+
+        if (encResult.isEncrypted && encResult.ciphertext) {
+          msgPayload.ciphertext = encResult.ciphertext;
+          msgPayload.iv = encResult.iv;
+        }
+
+        await setDoc(doc(db, 'chats', chatId, 'messages', messageId), msgPayload);
 
         // Update local optimistic message state to delivered
         setMessagesByChat((prev) => ({
@@ -1186,6 +1216,16 @@ export default function App() {
           // Handled
         }
       }
+    } else {
+      // Local preview / test mode without active Firebase authentication
+      setTimeout(() => {
+        setMessagesByChat((prev) => ({
+          ...prev,
+          [chatId]: (prev[chatId] || []).map((m) =>
+            m.messageId === messageId ? { ...m, status: 'delivered' } : m
+          ),
+        }));
+      }, 300);
     }
   };
 
