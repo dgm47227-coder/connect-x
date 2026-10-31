@@ -85,6 +85,11 @@ export const INITIAL_PRIVATE_SETTINGS: UserPrivateSettings = {
   notifyFriendRequests: true,
   notifyMessages: true,
   notifyStories: true,
+  notificationsEnabled: true,
+  notifyCalls: true,
+  notifySound: true,
+  notifyVibrate: true,
+  mutedChatIds: [],
   createdAt: nowIso,
   updatedAt: nowIso,
 };

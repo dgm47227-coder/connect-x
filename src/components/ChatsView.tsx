@@ -19,6 +19,8 @@ import {
   PhoneIncoming,
   PhoneOutgoing,
   Lock,
+  Bell,
+  BellOff,
 } from 'lucide-react';
 import {
   CallLogEntry,
@@ -63,6 +65,8 @@ interface ChatsViewProps {
     targetType: 'user' | 'message' | 'story'
   ) => void;
   onNavigateToFriends: () => void;
+  mutedChatIds?: string[];
+  onToggleMuteChat?: (chatId: string) => void;
 }
 
 type SidebarFilter = 'all' | 'unread' | 'calls';
@@ -82,6 +86,8 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
   onBlockUser,
   onReportTarget,
   onNavigateToFriends,
+  mutedChatIds = [],
+  onToggleMuteChat,
 }) => {
   const [sidebarFilter, setSidebarFilter] = useState<SidebarFilter>('all');
   const [searchQuery, setSearchQuery] = useState('');
@@ -448,9 +454,14 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-sm font-bold text-black truncate">{name}</span>
-                      <span className="text-[11px] font-medium text-black tabular-nums shrink-0">
-                        {formatTime(chat.updatedAt)}
-                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {mutedChatIds.includes(chat.chatId) && (
+                          <BellOff className="w-3.5 h-3.5 text-slate-400" title="Notifications muted" />
+                        )}
+                        <span className="text-[11px] font-medium text-black tabular-nums">
+                          {formatTime(chat.updatedAt)}
+                        </span>
+                      </div>
                     </div>
                     <div className="text-xs text-black font-mono font-semibold truncate">
                       @{handle}
@@ -573,6 +584,41 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                   <Video className="w-3.5 h-3.5 text-black" />
                   <span>Video Call</span>
                 </button>
+
+                {/* Mute/Unmute Notifications for Chat */}
+                {onToggleMuteChat && (
+                  <button
+                    type="button"
+                    aria-label={
+                      mutedChatIds.includes(activeChat.chatId)
+                        ? 'Unmute notifications'
+                        : 'Mute notifications'
+                    }
+                    onClick={() => onToggleMuteChat(activeChat.chatId)}
+                    className={`px-3 py-1.5 rounded-xl border text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer ${
+                      mutedChatIds.includes(activeChat.chatId)
+                        ? 'bg-amber-50 border-amber-300 text-amber-900 hover:bg-amber-100'
+                        : 'bg-white border-slate-300 hover:bg-slate-100 text-black'
+                    }`}
+                    title={
+                      mutedChatIds.includes(activeChat.chatId)
+                        ? 'Unmute notifications for this conversation'
+                        : 'Mute notifications for this conversation'
+                    }
+                  >
+                    {mutedChatIds.includes(activeChat.chatId) ? (
+                      <>
+                        <BellOff className="w-3.5 h-3.5 text-amber-700" />
+                        <span>Muted</span>
+                      </>
+                    ) : (
+                      <>
+                        <Bell className="w-3.5 h-3.5 text-slate-700" />
+                        <span>Mute</span>
+                      </>
+                    )}
+                  </button>
+                )}
 
                 <input
                   type="text"

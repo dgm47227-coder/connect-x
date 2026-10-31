@@ -58,8 +58,11 @@ import {
   getDeterministicPairId,
   getDirectedRequestId,
   formatNotificationPreview,
+  formatNotificationTitle,
+  formatNotificationBody,
   formatCallDuration,
   canStartCallWithPeer,
+  shouldDeliverNotification,
 } from './utils/connectxRules';
 import {
   INITIAL_BLOCKS,
@@ -83,6 +86,19 @@ import { DiscoverView } from './components/DiscoverView';
 import { StoriesView } from './components/StoriesView';
 import { ProfileView } from './components/ProfileView';
 import { ActiveCallSession, CallModal } from './components/CallModal';
+import { InAppNotificationBanner } from './components/InAppNotificationBanner';
+import { PrePermissionModal } from './components/PrePermissionModal';
+import { NotificationSettingsModal } from './components/NotificationSettingsModal';
+import { NotificationCenter } from './components/NotificationCenter';
+import {
+  registerDeviceToken,
+  unregisterDeviceToken,
+  playNotificationChime,
+  vibrateDevice,
+  showNativeNotification,
+  isNotificationDuplicate,
+  requestNotificationPermission,
+} from './services/notificationService';
 import { useOnlineStatus } from './hooks/usePWAInstall';
 
 function toIsoString(val: unknown): string {
@@ -142,6 +158,29 @@ export default function App() {
   const [activeCall, setActiveCall] = useState<ActiveCallSession | null>(null);
 
   const [showNotificationsDrawer, setShowNotificationsDrawer] = useState(false);
+  const [showNotificationSettings, setShowNotificationSettings] = useState(false);
+  const [showPrePermissionModal, setShowPrePermissionModal] = useState(false);
+  const [foregroundBannerNotif, setForegroundBannerNotif] = useState<UserNotification | null>(null);
+
+  const privateSettingsRef = useRef(privateSettings);
+  privateSettingsRef.current = privateSettings;
+  const activeTabRef = useRef(activeTab);
+  activeTabRef.current = activeTab;
+  const activeChatIdRef = useRef(activeChatId);
+  activeChatIdRef.current = activeChatId;
+
+  // Listen for native notification click navigation events
+  useEffect(() => {
+    const handleCustomNavigate = (e: Event) => {
+      const customEvent = e as CustomEvent<{ targetId?: string; type?: UserNotification['type'] }>;
+      if (customEvent.detail?.targetId) {
+        setActiveTab('chats');
+        setActiveChatId(customEvent.detail.targetId);
+      }
+    };
+    window.addEventListener('connectx:navigate', handleCustomNavigate);
+    return () => window.removeEventListener('connectx:navigate', handleCustomNavigate);
+  }, []);
   const [reportModalTarget, setReportModalTarget] = useState<{
     targetUid: string;
     targetLabel: string;
@@ -276,6 +315,11 @@ export default function App() {
               notifyFriendRequests: true,
               notifyMessages: true,
               notifyStories: true,
+              notificationsEnabled: true,
+              notifyCalls: true,
+              notifySound: true,
+              notifyVibrate: true,
+              mutedChatIds: [],
               createdAt: serverTimestamp(),
               updatedAt: serverTimestamp(),
             }).catch((e) => console.warn('users_private creation warning:', e));
@@ -303,6 +347,11 @@ export default function App() {
               notifyFriendRequests: Boolean(pData.notifyFriendRequests ?? true),
               notifyMessages: Boolean(pData.notifyMessages ?? true),
               notifyStories: Boolean(pData.notifyStories ?? true),
+              notificationsEnabled: Boolean(pData.notificationsEnabled ?? true),
+              notifyCalls: Boolean(pData.notifyCalls ?? true),
+              notifySound: Boolean(pData.notifySound ?? true),
+              notifyVibrate: Boolean(pData.notifyVibrate ?? true),
+              mutedChatIds: Array.isArray(pData.mutedChatIds) ? pData.mutedChatIds : [],
               createdAt: toIsoString(pData.createdAt),
               updatedAt: toIsoString(pData.updatedAt),
             });
@@ -313,6 +362,11 @@ export default function App() {
               email: chosenEmail,
             }));
           }
+
+          // Register device token for background push notifications
+          registerDeviceToken(user.uid).catch((tokenErr) => {
+            console.warn('Device token registration warning:', tokenErr);
+          });
         } catch (err) {
           console.error('User auth sync error:', err);
           setCurrentUser((prev) => ({
@@ -607,12 +661,75 @@ export default function App() {
             previewText: String(data.previewText),
             isRead: Boolean(data.isRead),
             createdAt: toIsoString(data.createdAt),
+            targetId: data.targetId ? String(data.targetId) : undefined,
+            callType: data.callType as CallType | undefined,
           });
         });
         remoteNotifs.sort(
           (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
         );
         setNotifications(remoteNotifs);
+
+        // Check for newly incoming unread notifications to trigger in-app alerts and sound
+        snap.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            const data = change.doc.data();
+            const notif: UserNotification = {
+              notificationId: change.doc.id,
+              recipientUid: String(data.recipientUid),
+              actorUid: String(data.actorUid),
+              actorName: String(data.actorName),
+              actorUsername: String(data.actorUsername),
+              type: data.type as UserNotification['type'],
+              previewText: String(data.previewText),
+              isRead: Boolean(data.isRead),
+              createdAt: toIsoString(data.createdAt),
+              targetId: data.targetId ? String(data.targetId) : undefined,
+              callType: data.callType as CallType | undefined,
+            };
+
+            // Deduplicate and ensure notification is unread
+            if (!notif.isRead && !isNotificationDuplicate(notif.notificationId)) {
+              if (shouldDeliverNotification(privateSettingsRef.current, notif, notif.targetId)) {
+                // If the user is actively viewing this exact chat, suppress the intrusive banner
+                const isViewingActiveChat =
+                  activeTabRef.current === 'chats' &&
+                  Boolean(notif.targetId) &&
+                  activeChatIdRef.current === notif.targetId;
+
+                if (!isViewingActiveChat) {
+                  // Play pleasant audio chime if enabled
+                  if (privateSettingsRef.current.notifySound !== false) {
+                    playNotificationChime(
+                      notif.type === 'incoming_call' || notif.type === 'incoming_video_call'
+                    );
+                  }
+
+                  // Vibrate mobile device if enabled
+                  if (privateSettingsRef.current.notifyVibrate !== false) {
+                    vibrateDevice();
+                  }
+
+                  // Show foreground banner toast
+                  setForegroundBannerNotif(notif);
+
+                  // Show system-level OS notification if browser tab is backgrounded
+                  if (typeof document !== 'undefined' && document.hidden) {
+                    const isPreview = privateSettingsRef.current.notificationPreviewEnabled;
+                    const title = formatNotificationTitle(notif);
+                    const body = formatNotificationBody(notif, isPreview);
+                    showNativeNotification(title, {
+                      body,
+                      tag: notif.notificationId,
+                      targetId: notif.targetId,
+                      type: notif.type,
+                    });
+                  }
+                }
+              }
+            }
+          }
+        });
       },
       () => {}
     );
@@ -892,6 +1009,7 @@ export default function App() {
           previewText: `${currentUser.displayName}: ${previewSummary.slice(0, 140)}`,
           isRead: false,
           createdAt: serverTimestamp(),
+          targetId: chatId,
         }).catch(() => {});
       } catch (err) {
         try {
@@ -1219,6 +1337,23 @@ export default function App() {
       callType,
       direction: 'outgoing',
     });
+
+    if (firebaseUser) {
+      const callNotifId = `call_${Date.now()}`;
+      setDoc(doc(db, 'notifications', callNotifId), {
+        notificationId: callNotifId,
+        recipientUid: peerUid,
+        actorUid: currentUser.uid,
+        actorName: currentUser.displayName,
+        actorUsername: currentUser.username,
+        type: callType === 'video' ? 'incoming_video_call' : 'incoming_call',
+        previewText: callType === 'video' ? 'Incoming video call' : 'Incoming voice call',
+        isRead: false,
+        createdAt: serverTimestamp(),
+        targetId: chatId,
+        callType: callType,
+      }).catch((e) => console.warn('Failed to dispatch call notification:', e));
+    }
   };
 
   const handleEndCall = (
@@ -1249,6 +1384,23 @@ export default function App() {
     const callSummaryText = `${
       finalCallType === 'video' ? 'HD Video Call' : 'Voice Call'
     } · ${formatCallDuration(durationSeconds)}`;
+
+    if (finalStatus === 'missed' && firebaseUser && activeCall.direction === 'outgoing') {
+      const missedNotifId = `missed_${Date.now()}`;
+      setDoc(doc(db, 'notifications', missedNotifId), {
+        notificationId: missedNotifId,
+        recipientUid: activeCall.peerUid,
+        actorUid: currentUser.uid,
+        actorName: currentUser.displayName,
+        actorUsername: currentUser.username,
+        type: 'missed_call',
+        previewText: `Missed ${finalCallType === 'video' ? 'video' : 'voice'} call`,
+        isRead: false,
+        createdAt: serverTimestamp(),
+        targetId: activeCall.chatId,
+        callType: finalCallType,
+      }).catch((e) => console.warn('Failed to dispatch missed call notification:', e));
+    }
 
     handleSendMessage(activeCall.chatId, callSummaryText, '', 'none', '', '');
     setActiveCall(null);
@@ -1448,12 +1600,87 @@ export default function App() {
           notifyFriendRequests: merged.notifyFriendRequests,
           notifyMessages: merged.notifyMessages,
           notifyStories: merged.notifyStories,
+          notificationsEnabled: merged.notificationsEnabled !== false,
+          notifyCalls: merged.notifyCalls !== false,
+          notifySound: merged.notifySound !== false,
+          notifyVibrate: merged.notifyVibrate !== false,
+          mutedChatIds: merged.mutedChatIds || [],
           updatedAt: serverTimestamp(),
         });
       } catch {
         // Handled
       }
     }
+  };
+
+  const handleToggleMuteChat = (chatId: string) => {
+    const currentMuted = privateSettings.mutedChatIds || [];
+    const isMuted = currentMuted.includes(chatId);
+    const updatedMuted = isMuted
+      ? currentMuted.filter((id) => id !== chatId)
+      : [...currentMuted, chatId];
+
+    handleUpdatePrivateSettings({ mutedChatIds: updatedMuted });
+    showToast(isMuted ? 'Chat notifications unmuted.' : 'Chat notifications muted.');
+  };
+
+  const handleUnmuteChat = (chatId: string) => {
+    const currentMuted = privateSettings.mutedChatIds || [];
+    const updatedMuted = currentMuted.filter((id) => id !== chatId);
+    handleUpdatePrivateSettings({ mutedChatIds: updatedMuted });
+    showToast('Chat unmuted.');
+  };
+
+  const handleMarkAllNotificationsAsRead = () => {
+    setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
+    if (firebaseUser) {
+      notifications.forEach((n) => {
+        if (!n.isRead) {
+          updateDoc(doc(db, 'notifications', n.notificationId), {
+            isRead: true,
+          }).catch(() => {});
+        }
+      });
+    }
+  };
+
+  const handleMarkNotificationAsRead = (notificationId: string) => {
+    setNotifications((prev) =>
+      prev.map((n) => (n.notificationId === notificationId ? { ...n, isRead: true } : n))
+    );
+    if (firebaseUser) {
+      updateDoc(doc(db, 'notifications', notificationId), { isRead: true }).catch(() => {});
+    }
+  };
+
+  const handleClearReadNotifications = () => {
+    const readIds = notifications.filter((n) => n.isRead).map((n) => n.notificationId);
+    setNotifications((prev) => prev.filter((n) => !n.isRead));
+    if (firebaseUser) {
+      readIds.forEach((id) => {
+        deleteDoc(doc(db, 'notifications', id)).catch(() => {});
+      });
+    }
+  };
+
+  const handleNavigateFromNotification = (notif: UserNotification) => {
+    if (
+      notif.type === 'new_message' ||
+      notif.type === 'incoming_call' ||
+      notif.type === 'incoming_video_call' ||
+      notif.type === 'missed_call'
+    ) {
+      setActiveTab('chats');
+      if (notif.targetId) {
+        setActiveChatId(notif.targetId);
+      }
+    } else if (notif.type === 'friend_request' || notif.type === 'friend_accepted') {
+      setActiveTab('friends');
+    } else if (notif.type === 'story_view') {
+      setActiveTab('stories');
+    }
+    setShowNotificationsDrawer(false);
+    setForegroundBannerNotif(null);
   };
 
   const handleSubmitReport = async (e: React.FormEvent) => {
@@ -1497,6 +1724,7 @@ export default function App() {
 
   const handleLogout = async () => {
     if (firebaseUser) {
+      await unregisterDeviceToken(firebaseUser.uid).catch(() => {});
       await firebaseSignOut(auth).catch(() => {});
     }
     setSandboxAuthenticated(false);
@@ -1505,6 +1733,7 @@ export default function App() {
   const handleDeleteAccount = async () => {
     if (firebaseUser) {
       try {
+        await unregisterDeviceToken(firebaseUser.uid).catch(() => {});
         await deleteDoc(doc(db, 'users', firebaseUser.uid)).catch(() => {});
         await deleteDoc(doc(db, 'users_private', firebaseUser.uid)).catch(() => {});
         await deleteUser(firebaseUser).catch(() => {});
@@ -1658,6 +1887,8 @@ export default function App() {
               setReportModalTarget({ targetUid, targetLabel, targetType })
             }
             onNavigateToFriends={() => setActiveTab('discover')}
+            mutedChatIds={privateSettings.mutedChatIds || []}
+            onToggleMuteChat={handleToggleMuteChat}
           />
         )}
 
@@ -1733,6 +1964,7 @@ export default function App() {
             }}
             onDeleteAccount={handleDeleteAccount}
             onLogout={handleLogout}
+            onOpenNotificationSettings={() => setShowNotificationSettings(true)}
           />
         )}
       </main>
@@ -1810,125 +2042,59 @@ export default function App() {
         onEndCall={handleEndCall}
       />
 
-      {/* Notifications, PWA Service Worker & Cloud Sync Drawer */}
-      {showNotificationsDrawer && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="notifications-drawer-title"
-          className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex justify-end"
-        >
-          <div className="max-w-md w-full h-full bg-white border-l border-slate-300 text-black p-6 flex flex-col justify-between">
-            <div className="space-y-4 overflow-y-auto">
-              <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-                <h2 id="notifications-drawer-title" className="text-base font-bold text-black">
-                  Notifications, PWA & Cloud Sync
-                </h2>
-                <button
-                  type="button"
-                  aria-label="Close notifications drawer"
-                  onClick={() => setShowNotificationsDrawer(false)}
-                  className="p-1.5 rounded-lg text-black hover:bg-slate-100 cursor-pointer"
-                >
-                  <X className="w-4 h-4 text-black" />
-                </button>
-              </div>
+      {/* Foreground In-App Toast Banner */}
+      <InAppNotificationBanner
+        notification={foregroundBannerNotif}
+        privateSettings={privateSettings}
+        onNavigate={handleNavigateFromNotification}
+        onDismiss={() => setForegroundBannerNotif(null)}
+      />
 
-              {/* PWA Service Worker & Manifest Status Card */}
-              <div className="p-3.5 rounded-xl bg-[#d9fdd3] border border-emerald-400 space-y-2 text-black">
-                <div className="flex items-center gap-2 text-xs font-bold text-black">
-                  <CheckCircle2 className="w-4 h-4 text-black shrink-0" />
-                  <span>PWA Service Worker & Manifest Active</span>
-                </div>
-                <p className="text-[11px] text-black leading-relaxed">
-                  Registered <code className="font-mono font-semibold">/sw.js</code> and{' '}
-                  <code className="font-mono font-semibold">/manifest.json</code> for offline
-                  caching.
-                </p>
-              </div>
+      {/* In-App Notification Center */}
+      <NotificationCenter
+        isOpen={showNotificationsDrawer}
+        notifications={notifications}
+        privateSettings={privateSettings}
+        onClose={() => setShowNotificationsDrawer(false)}
+        onNavigateToTarget={handleNavigateFromNotification}
+        onMarkAllAsRead={handleMarkAllNotificationsAsRead}
+        onMarkAsRead={handleMarkNotificationAsRead}
+        onClearReadNotifications={handleClearReadNotifications}
+        onOpenSettings={() => {
+          setShowNotificationsDrawer(false);
+          setShowNotificationSettings(true);
+        }}
+        onOpenPermissionPrompt={() => {
+          setShowPrePermissionModal(true);
+        }}
+      />
 
-              {/* Firebase Cloud Firestore Status Card */}
-              <div className="p-3.5 rounded-xl bg-[#f0f2f5] border border-slate-300 space-y-1 text-black">
-                <div className="flex items-center gap-2 text-xs font-bold text-black">
-                  <Database className="w-4 h-4 text-black shrink-0" />
-                  <span>Cloud Firestore Multi-User Database Active</span>
-                </div>
-                <p className="text-[11px] text-black leading-relaxed">
-                  All bot/AI accounts are removed. Real users sync live via Firestore (
-                  <code className="font-mono">gen-lang-client-0669346428</code>).
-                </p>
-              </div>
+      {/* Notification Settings Modal */}
+      <NotificationSettingsModal
+        isOpen={showNotificationSettings}
+        currentUserId={currentUser.uid}
+        privateSettings={privateSettings}
+        chats={chats}
+        onUpdatePrivateSettings={handleUpdatePrivateSettings}
+        onUnmuteChat={handleUnmuteChat}
+        onClose={() => setShowNotificationSettings(false)}
+      />
 
-              <div className="flex items-center justify-between text-xs text-black">
-                <span className="font-bold text-black">
-                  Recent Activity ({notifications.length})
-                </span>
-                {notifications.length > 0 && (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setNotifications((prev) => prev.map((n) => ({ ...n, isRead: true })));
-                      if (firebaseUser) {
-                        notifications.forEach((n) => {
-                          if (!n.isRead) {
-                            updateDoc(doc(db, 'notifications', n.notificationId), {
-                              isRead: true,
-                            }).catch(() => {});
-                          }
-                        });
-                      }
-                    }}
-                    className="text-black font-bold underline cursor-pointer"
-                  >
-                    Mark all as read
-                  </button>
-                )}
-              </div>
-
-              <div className="space-y-2.5">
-                {notifications.length === 0 ? (
-                  <div className="p-6 rounded-xl border border-slate-300 bg-[#f0f2f5] text-center text-xs text-black">
-                    No notifications yet. Friend requests and new messages from real users will
-                    appear here.
-                  </div>
-                ) : (
-                  notifications.map((n) => (
-                    <div
-                      key={n.notificationId}
-                      className={`p-3.5 rounded-xl border text-xs space-y-1 text-black ${
-                        n.isRead
-                          ? 'border-slate-300 bg-[#f0f2f5]'
-                          : 'border-emerald-500 bg-[#d9fdd3]'
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className="font-bold text-black">{n.actorName}</span>
-                        <span className="font-mono text-[11px] font-semibold text-black">
-                          @{n.actorUsername}
-                        </span>
-                      </div>
-                      <p className="leading-relaxed text-black">
-                        {formatNotificationPreview(
-                          n,
-                          privateSettings.notificationPreviewEnabled
-                        )}
-                      </p>
-                    </div>
-                  ))
-                )}
-              </div>
-            </div>
-
-            <button
-              type="button"
-              onClick={() => setShowNotificationsDrawer(false)}
-              className="w-full py-2.5 rounded-xl bg-[#f0f2f5] hover:bg-slate-200 border border-slate-300 text-black text-xs font-bold cursor-pointer"
-            >
-              Close Drawer
-            </button>
-          </div>
-        </div>
-      )}
+      {/* Pre-Permission Educational Modal */}
+      <PrePermissionModal
+        isOpen={showPrePermissionModal}
+        onAllow={async () => {
+          setShowPrePermissionModal(false);
+          const status = await requestNotificationPermission();
+          if (status === 'granted' && firebaseUser) {
+            registerDeviceToken(firebaseUser.uid).catch(() => {});
+            showToast('Push notifications enabled!');
+          } else if (status === 'denied') {
+            showToast('Notification permission was blocked in system settings.');
+          }
+        }}
+        onDismiss={() => setShowPrePermissionModal(false)}
+      />
 
       {/* Report Abuse Modal */}
       {reportModalTarget && (

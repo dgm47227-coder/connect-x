@@ -31,6 +31,11 @@ export interface UserPrivateSettings {
   notifyFriendRequests: boolean;
   notifyMessages: boolean;
   notifyStories: boolean;
+  notificationsEnabled?: boolean;
+  notifyCalls?: boolean;
+  notifySound?: boolean;
+  notifyVibrate?: boolean;
+  mutedChatIds?: string[];
   createdAt: string;
   updatedAt: string;
 }
@@ -147,16 +152,39 @@ export interface AbuseReport {
   createdAt: string;
 }
 
+export type UserNotificationType =
+  | 'friend_request'
+  | 'friend_accepted'
+  | 'new_message'
+  | 'story_view'
+  | 'incoming_call'
+  | 'incoming_video_call'
+  | 'missed_call'
+  | 'security_alert';
+
 export interface UserNotification {
   notificationId: string;
   recipientUid: string;
   actorUid: string;
   actorName: string;
   actorUsername: string;
-  type: 'friend_request' | 'friend_accepted' | 'new_message' | 'story_view';
+  type: UserNotificationType;
   previewText: string;
   isRead: boolean;
   createdAt: string;
+  targetId?: string;
+  callType?: CallType;
+}
+
+export interface DeviceTokenRecord {
+  tokenId: string;
+  uid: string;
+  token: string;
+  platform: 'android' | 'ios' | 'web';
+  deviceModel?: string;
+  userAgent?: string;
+  createdAt: string;
+  updatedAt: string;
 }
 
 export type CallType = 'audio' | 'video';

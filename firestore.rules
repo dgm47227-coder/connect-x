@@ -119,6 +119,7 @@ service cloud.firestore {
       data.keys().hasOnly([
         'uid', 'email', 'notificationPreviewEnabled',
         'notifyFriendRequests', 'notifyMessages', 'notifyStories',
+        'notificationsEnabled', 'notifyCalls', 'notifySound', 'notifyVibrate', 'mutedChatIds',
         'createdAt', 'updatedAt'
       ]) &&
       data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
@@ -128,6 +129,11 @@ service cloud.firestore {
       data.notifyFriendRequests is bool &&
       data.notifyMessages is bool &&
       data.notifyStories is bool &&
+      (!('notificationsEnabled' in data) || data.notificationsEnabled is bool) &&
+      (!('notifyCalls' in data) || data.notifyCalls is bool) &&
+      (!('notifySound' in data) || data.notifySound is bool) &&
+      (!('notifyVibrate' in data) || data.notifyVibrate is bool) &&
+      (!('mutedChatIds' in data) || (data.mutedChatIds is list && data.mutedChatIds.size() <= 500)) &&
       data.createdAt is timestamp &&
       data.updatedAt is timestamp;
     }
@@ -152,7 +158,9 @@ service cloud.firestore {
         incoming().updatedAt == request.time &&
         incoming().diff(existing()).affectedKeys().hasOnly([
           'email', 'notificationPreviewEnabled',
-          'notifyFriendRequests', 'notifyMessages', 'notifyStories', 'updatedAt'
+          'notifyFriendRequests', 'notifyMessages', 'notifyStories',
+          'notificationsEnabled', 'notifyCalls', 'notifySound', 'notifyVibrate', 'mutedChatIds',
+          'updatedAt'
         ]);
 
       allow delete: if isVerifiedUser() && isValidId(userId) && isOwner(userId);
@@ -695,7 +703,8 @@ service cloud.firestore {
       data.keys().hasOnly([
         'notificationId', 'recipientUid', 'actorUid',
         'actorName', 'actorUsername', 'type',
-        'previewText', 'isRead', 'createdAt'
+        'previewText', 'isRead', 'createdAt',
+        'targetId', 'callType'
       ]) &&
       isValidId(data.notificationId) &&
       isValidId(data.recipientUid) &&
@@ -704,9 +713,13 @@ service cloud.firestore {
       data.actorName is string && data.actorName.size() >= 1 && data.actorName.size() <= 60 &&
       isValidUsername(data.actorUsername) &&
       (data.type == 'friend_request' || data.type == 'friend_accepted' ||
-       data.type == 'new_message' || data.type == 'story_view') &&
+       data.type == 'new_message' || data.type == 'story_view' ||
+       data.type == 'incoming_call' || data.type == 'incoming_video_call' ||
+       data.type == 'missed_call' || data.type == 'security_alert') &&
       data.previewText is string && data.previewText.size() >= 1 && data.previewText.size() <= 200 &&
       data.isRead is bool &&
+      (!('targetId' in data) || (data.targetId is string && data.targetId.size() <= 128)) &&
+      (!('callType' in data) || (data.callType == 'audio' || data.callType == 'video')) &&
       data.createdAt is timestamp;
     }
 
@@ -734,6 +747,46 @@ service cloud.firestore {
         incoming().diff(existing()).affectedKeys().hasOnly(['isRead']);
 
       allow delete: if isVerifiedUser() && isValidId(notificationId) && existing().recipientUid == request.auth.uid;
+    }
+
+    // ---------------------------------------------------------
+    // 13. DeviceTokenRecord (/device_tokens/{tokenId})
+    // ---------------------------------------------------------
+    function isValidDeviceToken(data) {
+      return data.keys().hasAll(['tokenId', 'uid', 'token', 'platform', 'createdAt', 'updatedAt']) &&
+      data.keys().hasOnly(['tokenId', 'uid', 'token', 'platform', 'deviceModel', 'userAgent', 'createdAt', 'updatedAt']) &&
+      isValidId(data.tokenId) &&
+      data.uid is string && data.uid.size() >= 1 && data.uid.size() <= 128 &&
+      data.uid == request.auth.uid &&
+      data.token is string && data.token.size() >= 1 && data.token.size() <= 4096 &&
+      (data.platform == 'android' || data.platform == 'ios' || data.platform == 'web') &&
+      (!('deviceModel' in data) || (data.deviceModel is string && data.deviceModel.size() <= 120)) &&
+      (!('userAgent' in data) || (data.userAgent is string && data.userAgent.size() <= 500)) &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    match /device_tokens/{tokenId} {
+      allow get: if isSignedIn() && isValidId(tokenId) && resource.data.uid == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.uid == request.auth.uid;
+
+      allow create: if isVerifiedUser() &&
+        isValidId(tokenId) &&
+        isValidDeviceToken(incoming()) &&
+        incoming().tokenId == tokenId &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(tokenId) &&
+        isValidDeviceToken(incoming()) &&
+        existing().uid == request.auth.uid &&
+        incoming().uid == request.auth.uid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time;
+
+      allow delete: if isVerifiedUser() && isValidId(tokenId) && existing().uid == request.auth.uid;
     }
   }
 }

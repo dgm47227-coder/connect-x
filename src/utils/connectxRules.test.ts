@@ -15,6 +15,10 @@ import {
   formatCallDuration,
   canStartCallWithPeer,
   evaluateSecurityRulePayload,
+  isChatMuted,
+  shouldDeliverNotification,
+  formatNotificationTitle,
+  formatNotificationBody,
 } from './connectxRules';
 
 test('username normalization and validation enforces 3-30 lowercase alphanumeric/underscore rules', () => {
@@ -250,4 +254,49 @@ test('calling duration formatter and peer call authorization guard work accurate
   assert.equal(canStartCallWithPeer('user_alex_01', 'user_alex_01', blocked).allowed, false);
   assert.equal(canStartCallWithPeer('user_alex_01', 'user_blocked_9', blocked).allowed, false);
 });
+
+test('smart notification preferences, mute filter, and privacy title/body formatters work correctly', () => {
+  const settings = {
+    notificationsEnabled: true,
+    notifyMessages: true,
+    notifyCalls: false,
+    notifyFriendRequests: true,
+    notifyStories: true,
+    mutedChatIds: ['chat_muted_123'],
+  };
+
+  // Mute checks
+  assert.equal(isChatMuted(settings, 'chat_muted_123'), true);
+  assert.equal(isChatMuted(settings, 'chat_active_456'), false);
+  assert.equal(isChatMuted(null, 'chat_active_456'), false);
+
+  // Delivery decisions
+  assert.equal(shouldDeliverNotification('new_message', settings, 'chat_active_456'), true);
+  assert.equal(shouldDeliverNotification('new_message', settings, 'chat_muted_123'), false); // Muted
+  assert.equal(shouldDeliverNotification('incoming_call', settings), false); // notifyCalls is false
+  assert.equal(shouldDeliverNotification('friend_request', settings), true);
+
+  // Master disabled
+  const disabledSettings = { ...settings, notificationsEnabled: false };
+  assert.equal(shouldDeliverNotification('new_message', disabledSettings), false);
+  assert.equal(shouldDeliverNotification('friend_request', disabledSettings), false);
+
+  // Title formatting with privacy toggle
+  assert.equal(formatNotificationTitle('new_message', 'Alex', true), 'New message from Alex');
+  assert.equal(formatNotificationTitle('new_message', 'Alex', false), 'New message');
+  assert.equal(formatNotificationTitle('incoming_call', 'Alex', false), 'Incoming voice call');
+  assert.equal(formatNotificationTitle('incoming_video_call', 'Alex', false), 'Incoming video call');
+  assert.equal(formatNotificationTitle('missed_call', 'Alex', false), 'Missed call');
+
+  // Body formatting with privacy toggle
+  assert.equal(formatNotificationBody('new_message', 'Alex', 'Meeting at 5', true), 'Meeting at 5');
+  assert.equal(formatNotificationBody('new_message', 'Alex', 'Meeting at 5', false), 'You have a new message.');
+  assert.equal(formatNotificationBody('incoming_call', 'Alex', '', true), 'Alex is calling you.');
+  assert.equal(formatNotificationBody('incoming_call', 'Alex', '', false), 'Someone is calling you.');
+  assert.equal(formatNotificationBody('incoming_video_call', 'Alex', '', true), 'Alex is requesting a video call.');
+  assert.equal(formatNotificationBody('incoming_video_call', 'Alex', '', false), 'You have an incoming video call.');
+  assert.equal(formatNotificationBody('missed_call', 'Alex', '', true), 'You missed a call from Alex.');
+  assert.equal(formatNotificationBody('missed_call', 'Alex', '', false), 'You missed a call.');
+});
+
 

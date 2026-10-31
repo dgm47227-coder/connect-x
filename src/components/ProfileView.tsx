@@ -10,6 +10,8 @@ import {
   AlertCircle,
   KeyRound,
   MailCheck,
+  Settings,
+  ChevronRight,
 } from 'lucide-react';
 import {
   AbuseReport,
@@ -38,6 +40,7 @@ interface ProfileViewProps {
   onRequestPasswordReset: () => void;
   onDeleteAccount: () => void;
   onLogout: () => void;
+  onOpenNotificationSettings?: () => void;
 }
 
 const AVATAR_PRESETS = [
@@ -60,6 +63,7 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
   onRequestPasswordReset,
   onDeleteAccount,
   onLogout,
+  onOpenNotificationSettings,
 }) => {
   const [displayName, setDisplayName] = useState(currentUser.displayName);
   const [username, setUsername] = useState(currentUser.username);
@@ -399,6 +403,20 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
             <span className="font-mono font-bold text-black">{privateSettings.email}</span>
           </div>
 
+          {onOpenNotificationSettings && (
+            <button
+              type="button"
+              onClick={onOpenNotificationSettings}
+              className="w-full p-3 rounded-xl bg-[#25d366]/15 hover:bg-[#25d366]/25 border border-emerald-300 text-black text-xs font-bold flex items-center justify-between transition-colors cursor-pointer"
+            >
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4 text-emerald-800" />
+                <span>Open Advanced Notification & Alert Settings</span>
+              </div>
+              <ChevronRight className="w-4 h-4 text-slate-500" />
+            </button>
+          )}
+
           <div className="space-y-2">
             <label className="flex items-center justify-between p-3 rounded-xl bg-[#f0f2f5] border border-[#d1d7db] cursor-pointer">
               <div>
@@ -439,6 +457,36 @@ export const ProfileView: React.FC<ProfileViewProps> = ({
                 type="checkbox"
                 checked={privateSettings.notifyMessages}
                 onChange={(e) => onUpdatePrivateSettings({ notifyMessages: e.target.checked })}
+                className="w-4 h-4 accent-[#00a884]"
+              />
+            </label>
+
+            <label className="flex items-center justify-between p-3 rounded-xl bg-[#f0f2f5] border border-[#d1d7db] cursor-pointer">
+              <span className="text-xs font-semibold text-black">Voice & Video Call Alerts</span>
+              <input
+                type="checkbox"
+                checked={privateSettings.notifyCalls !== false}
+                onChange={(e) => onUpdatePrivateSettings({ notifyCalls: e.target.checked })}
+                className="w-4 h-4 accent-[#00a884]"
+              />
+            </label>
+
+            <label className="flex items-center justify-between p-3 rounded-xl bg-[#f0f2f5] border border-[#d1d7db] cursor-pointer">
+              <span className="text-xs font-semibold text-black">Sound Chimes</span>
+              <input
+                type="checkbox"
+                checked={privateSettings.notifySound !== false}
+                onChange={(e) => onUpdatePrivateSettings({ notifySound: e.target.checked })}
+                className="w-4 h-4 accent-[#00a884]"
+              />
+            </label>
+
+            <label className="flex items-center justify-between p-3 rounded-xl bg-[#f0f2f5] border border-[#d1d7db] cursor-pointer">
+              <span className="text-xs font-semibold text-black">Vibration Feedback</span>
+              <input
+                type="checkbox"
+                checked={privateSettings.notifyVibrate !== false}
+                onChange={(e) => onUpdatePrivateSettings({ notifyVibrate: e.target.checked })}
                 className="w-4 h-4 accent-[#00a884]"
               />
             </label>

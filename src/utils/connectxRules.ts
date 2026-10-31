@@ -170,7 +170,127 @@ export function formatNotificationPreview(
   if (notification.type === 'new_message') {
     return 'New private message received (preview hidden by privacy settings)';
   }
+  if (notification.type === 'incoming_call') {
+    return 'Incoming voice call (preview hidden by privacy settings)';
+  }
+  if (notification.type === 'incoming_video_call') {
+    return 'Incoming video call (preview hidden by privacy settings)';
+  }
+  if (notification.type === 'missed_call') {
+    return 'Missed call (preview hidden by privacy settings)';
+  }
   return notification.previewText;
+}
+
+export function isChatMuted(
+  settings?: { mutedChatIds?: string[] } | null,
+  chatId?: string | null
+): boolean {
+  if (!settings || !settings.mutedChatIds || !chatId) return false;
+  return settings.mutedChatIds.includes(chatId);
+}
+
+export function shouldDeliverNotification(
+  type: string,
+  settings?: {
+    notificationsEnabled?: boolean;
+    notifyMessages?: boolean;
+    notifyCalls?: boolean;
+    notifyFriendRequests?: boolean;
+    notifyStories?: boolean;
+    mutedChatIds?: string[];
+  } | null,
+  chatId?: string | null
+): boolean {
+  if (!settings) return true;
+  if (settings.notificationsEnabled === false) return false;
+
+  if (chatId && isChatMuted(settings, chatId)) {
+    return false;
+  }
+
+  if (type === 'new_message' && settings.notifyMessages === false) {
+    return false;
+  }
+
+  if (
+    (type === 'incoming_call' || type === 'incoming_video_call' || type === 'missed_call') &&
+    settings.notifyCalls === false
+  ) {
+    return false;
+  }
+
+  if (
+    (type === 'friend_request' || type === 'friend_accepted') &&
+    settings.notifyFriendRequests === false
+  ) {
+    return false;
+  }
+
+  if (type === 'story_view' && settings.notifyStories === false) {
+    return false;
+  }
+
+  return true;
+}
+
+export function formatNotificationTitle(
+  type: string,
+  actorName: string,
+  previewEnabled: boolean
+): string {
+  switch (type) {
+    case 'new_message':
+      return previewEnabled ? `New message from ${actorName}` : 'New message';
+    case 'incoming_call':
+      return 'Incoming voice call';
+    case 'incoming_video_call':
+      return 'Incoming video call';
+    case 'missed_call':
+      return 'Missed call';
+    case 'friend_request':
+      return previewEnabled ? `Friend request from ${actorName}` : 'New friend request';
+    case 'friend_accepted':
+      return previewEnabled ? `${actorName} accepted your request` : 'Friend request accepted';
+    case 'security_alert':
+      return 'ConnectX Security Alert';
+    default:
+      return 'ConnectX Notification';
+  }
+}
+
+export function formatNotificationBody(
+  type: string,
+  actorName: string,
+  contentSnippet: string,
+  previewEnabled: boolean
+): string {
+  switch (type) {
+    case 'new_message':
+      return previewEnabled && contentSnippet
+        ? contentSnippet
+        : 'You have a new message.';
+    case 'incoming_call':
+      return previewEnabled ? `${actorName} is calling you.` : 'Someone is calling you.';
+    case 'incoming_video_call':
+      return previewEnabled
+        ? `${actorName} is requesting a video call.`
+        : 'You have an incoming video call.';
+    case 'missed_call':
+      return previewEnabled ? `You missed a call from ${actorName}.` : 'You missed a call.';
+    case 'friend_request':
+      return previewEnabled
+        ? `${actorName} sent you a friend request.`
+        : 'You received a friend request.';
+    case 'friend_accepted':
+      return previewEnabled
+        ? `${actorName} accepted your friend request.`
+        : 'Your friend request was accepted.';
+    case 'security_alert':
+      return contentSnippet || 'Important security update for your account.';
+    default:
+      return contentSnippet || 'You have a new notification.';
+  }
 }
 
 export function formatRemainingStoryTime(expiresAtIso: string, nowMs: number = Date.now()): string {
