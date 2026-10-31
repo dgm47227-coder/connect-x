@@ -442,7 +442,7 @@ service cloud.firestore {
           'text', 'mediaUrl', 'mediaType',
           'replyToMessageId', 'replyToText',
           'status', 'isDeleted', 'createdAt', 'updatedAt',
-          'isEncrypted', 'ciphertext', 'iv', 'keyId'
+          'isEncrypted', 'ciphertext', 'iv', 'keyId', 'isEdited'
         ]) &&
         isValidId(data.messageId) &&
         isValidId(data.chatId) &&
@@ -457,6 +457,7 @@ service cloud.firestore {
         data.replyToText is string && data.replyToText.size() <= 300 &&
         (data.status == 'sent' || data.status == 'delivered' || data.status == 'read' || data.status == 'sending') &&
         data.isDeleted is bool &&
+        (!('isEdited' in data) || data.isEdited is bool) &&
         (!('isEncrypted' in data) || data.isEncrypted is bool) &&
         (!('ciphertext' in data) || (data.ciphertext is string && data.ciphertext.size() <= 10000)) &&
         (!('iv' in data) || (data.iv is string && data.iv.size() <= 64)) &&
@@ -470,7 +471,7 @@ service cloud.firestore {
           (resource.data.senderId == request.auth.uid || resource.data.recipientId == request.auth.uid) &&
           isChatParticipant();
         allow list: if isSignedIn() &&
-          (resource.data.senderId == request.auth.uid || resource.data.recipientId == request.auth.uid);
+          (isChatParticipant() || resource.data.senderId == request.auth.uid || resource.data.recipientId == request.auth.uid);
 
         allow create: if isVerifiedUser() &&
           isValidId(chatId) &&
@@ -500,7 +501,10 @@ service cloud.firestore {
             (request.auth.uid == existing().senderId &&
              incoming().isDeleted == true &&
              incoming().diff(existing()).affectedKeys().hasOnly(['text', 'mediaUrl', 'mediaType', 'isDeleted', 'updatedAt'])) ||
-            // Action 2: Recipient updates delivery/read status
+            // Action 2: Sender edits message text
+            (request.auth.uid == existing().senderId &&
+             incoming().diff(existing()).affectedKeys().hasOnly(['text', 'isEdited', 'updatedAt'])) ||
+            // Action 3: Recipient updates delivery/read status
             (request.auth.uid == existing().recipientId &&
              incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
           );
@@ -897,6 +901,69 @@ service cloud.firestore {
         allow update, delete: if isVerifiedUser() &&
           (resource.data.senderId == request.auth.uid ||
            request.auth.uid == get(/databases/$(database)/documents/groups/$(groupId)).data.creatorUid);
+      }
+    }
+
+    // ---------------------------------------------------------
+    // 16. WebRTC Calls (/calls/{callId})
+    // ---------------------------------------------------------
+    function isValidCallSession(data) {
+      return data.keys().hasAll([
+        'callId', 'chatId', 'callerUid', 'callerName', 'calleeUid',
+        'calleeName', 'callType', 'status', 'createdAt', 'updatedAt'
+      ]) &&
+      isValidId(data.callId) &&
+      isValidId(data.chatId) &&
+      isValidId(data.callerUid) &&
+      isValidId(data.calleeUid) &&
+      data.callerUid != data.calleeUid &&
+      (data.callType == 'audio' || data.callType == 'video') &&
+      (data.status == 'ringing' || data.status == 'connected' || data.status == 'ended' || data.status == 'rejected' || data.status == 'busy' || data.status == 'missed') &&
+      data.createdAt is timestamp &&
+      data.updatedAt is timestamp;
+    }
+
+    match /calls/{callId} {
+      allow get: if isSignedIn() && isValidId(callId) &&
+        (resource.data.callerUid == request.auth.uid || resource.data.calleeUid == request.auth.uid);
+      allow list: if isSignedIn() &&
+        (resource.data.callerUid == request.auth.uid || resource.data.calleeUid == request.auth.uid);
+
+      allow create: if isVerifiedUser() &&
+        isValidId(callId) &&
+        isValidCallSession(incoming()) &&
+        incoming().callId == callId &&
+        incoming().callerUid == request.auth.uid &&
+        incoming().status == 'ringing' &&
+        incoming().createdAt == request.time &&
+        incoming().updatedAt == request.time;
+
+      allow update: if isVerifiedUser() &&
+        isValidId(callId) &&
+        (existing().callerUid == request.auth.uid || existing().calleeUid == request.auth.uid) &&
+        incoming().callId == existing().callId &&
+        incoming().callerUid == existing().callerUid &&
+        incoming().calleeUid == existing().calleeUid &&
+        incoming().createdAt == existing().createdAt &&
+        incoming().updatedAt == request.time;
+
+      allow delete: if isVerifiedUser() && isValidId(callId) &&
+        (existing().callerUid == request.auth.uid || existing().calleeUid == request.auth.uid);
+
+      match /callerCandidates/{candId} {
+        allow read: if isSignedIn() &&
+          (get(/databases/$(database)/documents/calls/$(callId)).data.callerUid == request.auth.uid ||
+           get(/databases/$(database)/documents/calls/$(callId)).data.calleeUid == request.auth.uid);
+        allow write: if isVerifiedUser() &&
+          get(/databases/$(database)/documents/calls/$(callId)).data.callerUid == request.auth.uid;
+      }
+
+      match /calleeCandidates/{candId} {
+        allow read: if isSignedIn() &&
+          (get(/databases/$(database)/documents/calls/$(callId)).data.callerUid == request.auth.uid ||
+           get(/databases/$(database)/documents/calls/$(callId)).data.calleeUid == request.auth.uid);
+        allow write: if isVerifiedUser() &&
+          get(/databases/$(database)/documents/calls/$(callId)).data.calleeUid == request.auth.uid;
       }
     }
   }

@@ -28,6 +28,8 @@ import {
   onSnapshot,
   query,
   where,
+  orderBy,
+  limitToLast,
   serverTimestamp,
   Timestamp,
 } from 'firebase/firestore';
@@ -810,6 +812,36 @@ export default function App() {
       () => {}
     );
 
+    const unsubIncomingCalls = onSnapshot(
+      query(
+        collection(db, 'calls'),
+        where('calleeUid', '==', firebaseUser.uid),
+        where('status', '==', 'ringing')
+      ),
+      (snap) => {
+        snap.docChanges().forEach((change) => {
+          if (change.type === 'added') {
+            const data = change.doc.data();
+            const callerUid = String(data.callerUid);
+            if (blocks.some((b) => b.blockedUid === callerUid)) return;
+            setActiveCall({
+              callId: change.doc.id,
+              chatId: String(data.chatId || ''),
+              peerUid: callerUid,
+              peerName: String(data.callerName || 'Caller'),
+              peerUsername: String(data.callerUsername || 'user'),
+              peerAvatar: String(data.callerAvatar || ''),
+              callType: (data.callType as CallType) || 'audio',
+              direction: 'incoming',
+              currentUserId: firebaseUser.uid,
+              currentUserUsername: currentUser.username,
+            });
+          }
+        });
+      },
+      () => {}
+    );
+
     return () => {
       unsubUsers();
       unsubInReq();
@@ -823,28 +855,13 @@ export default function App() {
       unsubNotifications();
       unsubGroups();
       unsubDevices();
+      unsubIncomingCalls();
     };
   }, [authReady, firebaseUser]);
 
-  // Listen to active chat's messages in real time when signed in with Firebase Auth
+  // Listen to active chat's messages in real time with single bounded query
   useEffect(() => {
     if (!authReady || !firebaseUser || !activeChatId) return;
-
-    let sentMsgs: ChatMessage[] = [];
-    let recMsgs: ChatMessage[] = [];
-
-    const syncChatMessages = () => {
-      const byId = new Map<string, ChatMessage>();
-      sentMsgs.forEach((m) => byId.set(m.messageId, m));
-      recMsgs.forEach((m) => byId.set(m.messageId, m));
-      const sorted = Array.from(byId.values()).sort(
-        (a, b) => new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime()
-      );
-      setMessagesByChat((prev) => ({
-        ...prev,
-        [activeChatId]: sorted,
-      }));
-    };
 
     const parseMessages = (snap: {
       forEach: (cb: (d: { id: string; data: () => Record<string, unknown> }) => void) => void;
@@ -868,6 +885,7 @@ export default function App() {
           replyToText: String(data.replyToText || ''),
           status: (data.status as ChatMessage['status']) || 'delivered',
           isDeleted: Boolean(data.isDeleted),
+          isEdited: Boolean(data.isEdited),
           isEncrypted: isEnc,
           ciphertext,
           iv,
@@ -891,32 +909,51 @@ export default function App() {
       return list;
     };
 
-    const unsubM1 = onSnapshot(
+    const unsubMessages = onSnapshot(
       query(
         collection(db, 'chats', activeChatId, 'messages'),
-        where('senderId', '==', firebaseUser.uid)
+        orderBy('createdAt', 'asc'),
+        limitToLast(50)
       ),
       (snap) => {
-        sentMsgs = parseMessages(snap);
-        syncChatMessages();
+        const msgs = parseMessages(snap);
+        setMessagesByChat((prev) => ({
+          ...prev,
+          [activeChatId]: msgs,
+        }));
+
+        // Read Receipts: Mark unread incoming messages as read
+        const unreadDocs = snap.docs.filter((d) => {
+          const data = d.data();
+          return data.recipientId === firebaseUser.uid && data.status !== 'read';
+        });
+
+        if (unreadDocs.length > 0) {
+          unreadDocs.forEach((d) => {
+            updateDoc(doc(db, 'chats', activeChatId, 'messages', d.id), {
+              status: 'read',
+              updatedAt: serverTimestamp(),
+            }).catch(() => {});
+          });
+
+          // Zero out unread count on chat document
+          const targetChat = chats.find((c) => c.chatId === activeChatId);
+          if (targetChat) {
+            const isP1 = targetChat.participant1Uid === firebaseUser.uid;
+            updateDoc(doc(db, 'chats', activeChatId), {
+              [isP1 ? 'unreadCount1' : 'unreadCount2']: 0,
+              updatedAt: serverTimestamp(),
+            }).catch(() => {});
+          }
+        }
       },
-      () => {}
-    );
-    const unsubM2 = onSnapshot(
-      query(
-        collection(db, 'chats', activeChatId, 'messages'),
-        where('recipientId', '==', firebaseUser.uid)
-      ),
-      (snap) => {
-        recMsgs = parseMessages(snap);
-        syncChatMessages();
-      },
-      () => {}
+      (err) => {
+        console.warn('Active chat message stream warning:', err);
+      }
     );
 
     return () => {
-      unsubM1();
-      unsubM2();
+      unsubMessages();
     };
   }, [authReady, firebaseUser, activeChatId]);
 
@@ -1266,6 +1303,44 @@ export default function App() {
     }
   };
 
+  const handleEditMessage = async (chatId: string, messageId: string, newText: string) => {
+    const nowIso = new Date().toISOString();
+    setMessagesByChat((prev) => ({
+      ...prev,
+      [chatId]: (prev[chatId] || []).map((m) =>
+        m.messageId === messageId && m.senderId === currentUser.uid
+          ? {
+              ...m,
+              text: newText,
+              isEdited: true,
+              updatedAt: nowIso,
+            }
+          : m
+      ),
+    }));
+    showToast('Message edited.');
+
+    if (firebaseUser) {
+      try {
+        await updateDoc(doc(db, 'chats', chatId, 'messages', messageId), {
+          text: newText,
+          isEdited: true,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (err) {
+        console.warn('Failed to edit message in Firestore:', err);
+      }
+    }
+  };
+
+  const handleTyping = (chatId: string, isTyping: boolean) => {
+    if (!firebaseUser) return;
+    updateDoc(doc(db, 'chats', chatId), {
+      typingUid: isTyping ? currentUser.uid : '',
+      updatedAt: serverTimestamp(),
+    }).catch(() => {});
+  };
+
   const handleAcceptFriendRequest = async (req: FriendRequest) => {
     if (req.toUid !== currentUser.uid || req.status !== 'pending') return;
 
@@ -1543,6 +1618,8 @@ export default function App() {
       peerAvatar,
       callType,
       direction: 'outgoing',
+      currentUserId: currentUser.uid,
+      currentUserUsername: currentUser.username,
     });
 
     if (firebaseUser) {
@@ -2125,6 +2202,8 @@ export default function App() {
             onSelectGroup={setActiveGroupId}
             onOpenCreateGroup={() => setShowCreateGroupModal(true)}
             onRetryMessage={handleRetryMessage}
+            onEditMessage={handleEditMessage}
+            onTyping={handleTyping}
             isE2EEActive={true}
           />
         )}

@@ -25,6 +25,7 @@ import {
   ShieldCheck,
   RotateCw,
   AlertCircle,
+  Edit3,
 } from 'lucide-react';
 import {
   CallLogEntry,
@@ -78,6 +79,8 @@ interface ChatsViewProps {
   onSelectGroup?: (groupId: string | null) => void;
   onOpenCreateGroup?: () => void;
   onRetryMessage?: (chatId: string, message: ChatMessage) => void;
+  onEditMessage?: (chatId: string, messageId: string, newText: string) => void;
+  onTyping?: (chatId: string, isTyping: boolean) => void;
   isE2EEActive?: boolean;
 }
 
@@ -105,6 +108,8 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
   onSelectGroup,
   onOpenCreateGroup,
   onRetryMessage,
+  onEditMessage,
+  onTyping,
   isE2EEActive = true,
 }) => {
   const [sidebarFilter, setSidebarFilter] = useState<SidebarFilter>('all');
@@ -112,6 +117,7 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
   const [messageSearch, setMessageSearch] = useState('');
   const [draftsByChat, setDraftsByChat] = useState<Record<string, string>>({});
   const [replyingTo, setReplyingTo] = useState<ChatMessage | null>(null);
+  const [editingMessage, setEditingMessage] = useState<ChatMessage | null>(null);
   const [selectedMediaUrl, setSelectedMediaUrl] = useState('');
   const [showMediaPicker, setShowMediaPicker] = useState(false);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
@@ -122,12 +128,41 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
 
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const currentDraft = activeChatId ? draftsByChat[activeChatId] || '' : '';
   const setDraftText = (text: string) => {
     if (!activeChatId) return;
     setDraftsByChat((prev) => ({ ...prev, [activeChatId]: text }));
   };
+
+  const handleDraftChange = (text: string) => {
+    setDraftText(text);
+    if (activeChat && onTyping) {
+      onTyping(activeChat.chatId, true);
+      if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+      typingTimeoutRef.current = setTimeout(() => {
+        if (activeChat && onTyping) onTyping(activeChat.chatId, false);
+      }, 2500);
+    }
+  };
+
+  function formatDateHeader(dateString: string): string {
+    try {
+      const d = new Date(dateString);
+      if (isNaN(d.getTime())) return 'Recently';
+      const now = new Date();
+      const today = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+      const messageDay = new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+      const diffDays = Math.round((today - messageDay) / (24 * 3600 * 1000));
+
+      if (diffDays === 0) return 'Today';
+      if (diffDays === 1) return 'Yesterday';
+      return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' });
+    } catch {
+      return 'Recently';
+    }
+  }
 
   const visibleChats = chats.filter((c) => {
     const otherUid =
@@ -211,16 +246,24 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
       return;
     }
 
+    if (typingTimeoutRef.current) clearTimeout(typingTimeoutRef.current);
+    if (activeChat && onTyping) onTyping(activeChat.chatId, false);
+
     setIsSending(true);
     try {
-      await onSendMessage(
-        activeChat.chatId,
-        trimmed,
-        selectedMediaUrl,
-        mediaType,
-        replyingTo ? replyingTo.messageId : '',
-        replyingTo ? replyingTo.text.slice(0, 140) : ''
-      );
+      if (editingMessage && onEditMessage) {
+        await onEditMessage(activeChat.chatId, editingMessage.messageId, trimmed);
+        setEditingMessage(null);
+      } else {
+        await onSendMessage(
+          activeChat.chatId,
+          trimmed,
+          selectedMediaUrl,
+          mediaType,
+          replyingTo ? replyingTo.messageId : '',
+          replyingTo ? replyingTo.text.slice(0, 140) : ''
+        );
+      }
 
       setDraftText('');
       setSelectedMediaUrl('');
@@ -630,11 +673,20 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                       ·
                     </span>
                     <span className="whitespace-nowrap shrink-0 text-black">
-                      {simulatePeerTyping
-                        ? 'typing...'
-                        : otherUserObj?.privacyShowOnlineStatus && otherUserObj?.isOnline
-                          ? 'online'
-                          : 'private status'}
+                      {activeChat.typingUid === otherParticipantUid || simulatePeerTyping ? (
+                        <span className="flex items-center gap-1 text-[#008C5A] font-bold">
+                          <span>typing</span>
+                          <span className="inline-flex gap-0.5">
+                            <span className="w-1 h-1 rounded-full bg-[#008C5A] animate-bounce" />
+                            <span className="w-1 h-1 rounded-full bg-[#008C5A] animate-bounce [animation-delay:0.15s]" />
+                            <span className="w-1 h-1 rounded-full bg-[#008C5A] animate-bounce [animation-delay:0.3s]" />
+                          </span>
+                        </span>
+                      ) : otherUserObj?.privacyShowOnlineStatus && otherUserObj?.isOnline ? (
+                        <span className="text-[#008C5A] font-semibold">online</span>
+                      ) : (
+                        'last seen recently'
+                      )}
                     </span>
                   </div>
                 </div>
@@ -666,10 +718,10 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                       'audio'
                     )
                   }
-                  className="px-3 py-1.5 rounded-xl bg-[#25d366] hover:bg-[#1ebe5d] text-black text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer"
+                  className="px-3 py-1.5 rounded-xl bg-[#008C5A] hover:bg-[#006B46] text-white text-xs font-bold flex items-center gap-1.5 transition-colors whitespace-nowrap shrink-0 cursor-pointer shadow-xs"
                   title="Voice Call"
                 >
-                  <Phone className="w-3.5 h-3.5 text-black" />
+                  <Phone className="w-3.5 h-3.5" />
                   <span>Voice Call</span>
                 </button>
 
@@ -797,96 +849,126 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                   No messages match your filter. Say hello below!
                 </div>
               ) : (
-                paginatedMessages.map((msg) => {
+                paginatedMessages.map((msg, idx) => {
                   const isMine = msg.senderId === currentUser.uid;
+                  const prevMsg = idx > 0 ? paginatedMessages[idx - 1] : null;
+                  const currentDateHeader = formatDateHeader(msg.createdAt);
+                  const prevDateHeader = prevMsg ? formatDateHeader(prevMsg.createdAt) : null;
+                  const showDateHeader = idx === 0 || currentDateHeader !== prevDateHeader;
+
                   return (
-                    <div
-                      key={msg.messageId}
-                      className={`flex flex-col ${isMine ? 'items-end' : 'items-start'}`}
-                    >
-                      <div
-                        className={`max-w-[82%] sm:max-w-[70%] rounded-2xl px-4 py-2.5 space-y-1.5 shadow-xs border ${
-                          isMine
-                            ? 'bg-[#d9fdd3] border-emerald-300 text-black rounded-br-xs'
-                            : 'bg-white border-slate-300 text-black rounded-bl-xs'
-                        }`}
-                      >
-                        {msg.replyToText && !msg.isDeleted && (
-                          <div className="text-xs px-2.5 py-1.5 rounded-lg bg-black/5 text-black border-l-2 border-black">
-                            <span className="font-bold block text-[10px] text-black">
-                              Replying to:
-                            </span>
-                            <span className="line-clamp-1 text-black">{msg.replyToText}</span>
-                          </div>
-                        )}
-
-                        {msg.mediaType === 'image' && msg.mediaUrl && !msg.isDeleted && (
-                          <div className="rounded-xl overflow-hidden my-1 border border-slate-300">
-                            <img
-                              src={msg.mediaUrl}
-                              alt="Shared attachment"
-                              referrerPolicy="no-referrer"
-                              className="max-h-60 w-auto object-cover"
-                            />
-                          </div>
-                        )}
-
-                        <p
-                          className={`text-sm leading-relaxed break-words text-black ${
-                            msg.isDeleted ? 'italic text-xs' : ''
+                    <React.Fragment key={msg.messageId}>
+                      {showDateHeader && (
+                        <div className="flex items-center justify-center my-3.5">
+                          <span className="px-3.5 py-1 rounded-full text-[11px] font-bold bg-white/90 border border-slate-300 text-slate-700 shadow-2xs backdrop-blur-xs">
+                            {currentDateHeader}
+                          </span>
+                        </div>
+                      )}
+                      <div className={`flex flex-col ${isMine ? 'items-end' : 'items-start'}`}>
+                        <div
+                          className={`max-w-[82%] sm:max-w-[70%] rounded-2xl px-4 py-2.5 space-y-1.5 shadow-xs border ${
+                            isMine
+                              ? 'bg-[#d9fdd3] border-[#008C5A]/35 text-black rounded-br-xs'
+                              : 'bg-white border-slate-300 text-black rounded-bl-xs'
                           }`}
                         >
-                          {msg.isDeleted ? 'This message was deleted by sender.' : msg.text}
-                        </p>
+                          {msg.replyToText && !msg.isDeleted && (
+                            <div className="text-xs px-2.5 py-1.5 rounded-lg bg-black/5 text-black border-l-2 border-[#008C5A]">
+                              <span className="font-bold block text-[10px] text-[#006B46]">
+                                Replying to:
+                              </span>
+                              <span className="line-clamp-1 text-black">{msg.replyToText}</span>
+                            </div>
+                          )}
 
-                        <div className="flex items-center justify-end gap-1.5 text-[11px] font-medium tabular-nums text-black">
-                          {msg.isEncrypted && (
-                            <Lock className="w-3 h-3 text-[#008C5A]" title="End-to-End Encrypted message" />
+                          {msg.mediaType === 'image' && msg.mediaUrl && !msg.isDeleted && (
+                            <div className="rounded-xl overflow-hidden my-1 border border-slate-300">
+                              <img
+                                src={msg.mediaUrl}
+                                alt="Shared attachment"
+                                referrerPolicy="no-referrer"
+                                className="max-h-60 w-auto object-cover"
+                              />
+                            </div>
                           )}
-                          <span>{formatTime(msg.createdAt)}</span>
-                          {isMine && (
-                            <span className="inline-flex items-center gap-0.5" title={msg.status}>
-                              {msg.status === 'sending' ? (
-                                <Clock className="w-3.5 h-3.5 text-slate-400 animate-spin" />
-                              ) : msg.status === 'failed' ? (
-                                <span className="inline-flex items-center gap-0.5 text-rose-600 font-bold">
-                                  <AlertCircle className="w-3.5 h-3.5" />
-                                  <span>Failed</span>
-                                </span>
-                              ) : msg.status === 'read' && currentUser.privacyShowReadReceipts ? (
-                                <CheckCheck className="w-3.5 h-3.5 text-[#008C5A]" />
-                              ) : msg.status === 'delivered' ? (
-                                <CheckCheck className="w-3.5 h-3.5 text-slate-500" />
-                              ) : (
-                                <Check className="w-3.5 h-3.5 text-slate-400" />
-                              )}
-                              {msg.status !== 'failed' && <span>{msg.status}</span>}
-                            </span>
-                          )}
+
+                          <p
+                            className={`text-sm leading-relaxed break-words text-black ${
+                              msg.isDeleted ? 'italic text-xs' : ''
+                            }`}
+                          >
+                            {msg.isDeleted ? 'This message was deleted by sender.' : msg.text}
+                          </p>
+
+                          <div className="flex items-center justify-end gap-1.5 text-[11px] font-medium tabular-nums text-black">
+                            {msg.isEncrypted && (
+                              <Lock className="w-3 h-3 text-[#008C5A]" title="End-to-End Encrypted message" />
+                            )}
+                            {msg.isEdited && (
+                              <span className="text-[10px] text-slate-500 font-normal italic mr-0.5">(edited)</span>
+                            )}
+                            <span>{formatTime(msg.createdAt)}</span>
+                            {isMine && (
+                              <span className="inline-flex items-center gap-0.5" title={msg.status}>
+                                {msg.status === 'sending' ? (
+                                  <Clock className="w-3.5 h-3.5 text-slate-400 animate-spin" />
+                                ) : msg.status === 'failed' ? (
+                                  <span className="inline-flex items-center gap-0.5 text-rose-600 font-bold">
+                                    <AlertCircle className="w-3.5 h-3.5" />
+                                    <span>Failed</span>
+                                  </span>
+                                ) : msg.status === 'read' && currentUser.privacyShowReadReceipts ? (
+                                  <CheckCheck className="w-3.5 h-3.5 text-[#008C5A]" />
+                                ) : msg.status === 'delivered' ? (
+                                  <CheckCheck className="w-3.5 h-3.5 text-slate-500" />
+                                ) : (
+                                  <Check className="w-3.5 h-3.5 text-slate-400" />
+                                )}
+                                {msg.status !== 'failed' && <span>{msg.status}</span>}
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
 
-                      {/* Message Action Bar */}
-                      {!msg.isDeleted && (
-                        <div className="flex items-center gap-2.5 mt-1 px-1 text-[11px] font-semibold text-black">
-                          {msg.status === 'failed' && onRetryMessage && (
+                        {/* Message Action Bar */}
+                        {!msg.isDeleted && (
+                          <div className="flex items-center gap-2.5 mt-1 px-1 text-[11px] font-semibold text-black">
+                            {msg.status === 'failed' && onRetryMessage && (
+                              <button
+                                type="button"
+                                onClick={() => onRetryMessage(activeChat.chatId, msg)}
+                                className="hover:underline flex items-center gap-1 cursor-pointer text-rose-600 font-bold"
+                              >
+                                <RotateCw className="w-3 h-3" />
+                                <span>Retry Send</span>
+                              </button>
+                            )}
+                            {isMine && onEditMessage && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setEditingMessage(msg);
+                                  setDraftText(msg.text);
+                                  setReplyingTo(null);
+                                  if (textareaRef.current) {
+                                    textareaRef.current.focus();
+                                  }
+                                }}
+                                className="hover:underline flex items-center gap-1 cursor-pointer text-black"
+                              >
+                                <Edit3 className="w-3 h-3 text-black" />
+                                <span>Edit</span>
+                              </button>
+                            )}
                             <button
                               type="button"
-                              onClick={() => onRetryMessage(activeChat.chatId, msg)}
-                              className="hover:underline flex items-center gap-1 cursor-pointer text-rose-600 font-bold"
+                              onClick={() => setReplyingTo(msg)}
+                              className="hover:underline flex items-center gap-1 cursor-pointer text-black"
                             >
-                              <RotateCw className="w-3 h-3" />
-                              <span>Retry Send</span>
+                              <Reply className="w-3 h-3 text-black" />
+                              <span>Reply</span>
                             </button>
-                          )}
-                          <button
-                            type="button"
-                            onClick={() => setReplyingTo(msg)}
-                            className="hover:underline flex items-center gap-1 cursor-pointer text-black"
-                          >
-                            <Reply className="w-3 h-3 text-black" />
-                            <span>Reply</span>
-                          </button>
                           {msg.text && (
                             <button
                               type="button"
@@ -925,7 +1007,8 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                         </div>
                       )}
                     </div>
-                  );
+                  </React.Fragment>
+                );
                 })
               )}
 
@@ -963,6 +1046,27 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                   aria-label="Cancel reply"
                   onClick={() => setReplyingTo(null)}
                   className="text-black cursor-pointer"
+                >
+                  <X className="w-4 h-4 text-black" />
+                </button>
+              </div>
+            )}
+
+            {editingMessage && (
+              <div className="px-4 py-2 bg-emerald-50 border-t border-emerald-300 flex items-center justify-between text-xs text-black">
+                <div className="truncate pr-4 flex items-center gap-2">
+                  <Edit3 className="w-3.5 h-3.5 text-[#008C5A] shrink-0" />
+                  <span className="font-bold text-[#006B46] shrink-0">Editing message:</span>
+                  <span className="text-slate-700 truncate">{editingMessage.text}</span>
+                </div>
+                <button
+                  type="button"
+                  aria-label="Cancel edit"
+                  onClick={() => {
+                    setEditingMessage(null);
+                    setDraftText('');
+                  }}
+                  className="text-slate-600 hover:text-black font-bold cursor-pointer shrink-0"
                 >
                   <X className="w-4 h-4 text-black" />
                 </button>
@@ -1019,7 +1123,7 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                       setSelectedMediaUrl(createStoryVisualSvg('geometry', 'System Architecture'));
                       setShowMediaPicker(false);
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-[#d9fdd3] border border-emerald-400 text-black text-xs font-bold hover:bg-[#25d366] cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-300 text-[#006B46] text-xs font-bold hover:bg-emerald-100 cursor-pointer"
                   >
                     Attach Architecture Card
                   </button>
@@ -1029,7 +1133,7 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                       setSelectedMediaUrl(createStoryVisualSvg('sunset', 'Evening Horizon'));
                       setShowMediaPicker(false);
                     }}
-                    className="px-3 py-1.5 rounded-lg bg-[#d9fdd3] border border-emerald-400 text-black text-xs font-bold hover:bg-[#25d366] cursor-pointer"
+                    className="px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-300 text-[#006B46] text-xs font-bold hover:bg-emerald-100 cursor-pointer"
                   >
                     Attach Horizon Visual
                   </button>
@@ -1037,7 +1141,7 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
               </div>
             )}
 
-            {/* WhatsApp-Style Composer Form with Auto-expanding Textarea & Keyboard Protection */}
+            {/* ConnectX Modern Composer Form with Auto-expanding Textarea & Keyboard Protection */}
             <form
               onSubmit={handleSend}
               className="p-3 border-t border-slate-300 flex items-end gap-2 bg-[#f0f2f5]"
@@ -1058,32 +1162,41 @@ export const ChatsView: React.FC<ChatsViewProps> = ({
                   aria-label="Message input"
                   maxLength={2000}
                   value={currentDraft}
-                  onChange={(e) => setDraftText(e.target.value)}
+                  onChange={(e) => handleDraftChange(e.target.value)}
                   onKeyDown={handleKeyDown}
-                  placeholder={`Message ${otherParticipantName}... (Shift+Enter for newline)`}
-                  className="w-full px-3.5 py-2.5 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#25d366] resize-none overflow-y-auto max-h-32 transition-all leading-relaxed"
+                  placeholder={
+                    editingMessage
+                      ? 'Edit your message...'
+                      : `Message ${otherParticipantName}... (Shift+Enter for newline)`
+                  }
+                  className="w-full px-3.5 py-2.5 text-sm text-black placeholder:text-black/60 rounded-xl border border-slate-300 bg-white focus:outline-none focus:ring-2 focus:ring-[#008C5A] resize-none overflow-y-auto max-h-32 transition-all leading-relaxed"
                 />
               </div>
 
               <button
                 type="submit"
                 disabled={isSending || (!currentDraft.trim() && !selectedMediaUrl)}
-                aria-label="Send message"
-                className={`px-4 py-2.5 rounded-xl text-black text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer mb-0.5 ${
+                aria-label={editingMessage ? 'Save edited message' : 'Send message'}
+                className={`px-4 py-2.5 rounded-xl text-white text-xs font-bold transition-all flex items-center gap-1.5 shrink-0 cursor-pointer mb-0.5 ${
                   isSending || (!currentDraft.trim() && !selectedMediaUrl)
-                    ? 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-60'
-                    : 'bg-[#25d366] hover:bg-[#1ebe5d] active:scale-95 text-black shadow-xs'
+                    ? 'bg-slate-300 text-slate-500 cursor-not-allowed opacity-60'
+                    : 'bg-[#008C5A] hover:bg-[#006B46] active:scale-95 shadow-xs'
                 }`}
               >
                 {isSending ? (
                   <>
-                    <span>Sending</span>
-                    <Clock className="w-3.5 h-3.5 text-black animate-spin" />
+                    <span>{editingMessage ? 'Saving' : 'Sending'}</span>
+                    <Clock className="w-3.5 h-3.5 animate-spin" />
+                  </>
+                ) : editingMessage ? (
+                  <>
+                    <span>Save</span>
+                    <Check className="w-3.5 h-3.5" />
                   </>
                 ) : (
                   <>
                     <span>Send</span>
-                    <Send className="w-3.5 h-3.5 text-black" />
+                    <Send className="w-3.5 h-3.5" />
                   </>
                 )}
               </button>

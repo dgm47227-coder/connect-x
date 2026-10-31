@@ -8,17 +8,24 @@ import {
   VideoOff,
   Volume2,
   VolumeX,
-  MonitorUp,
   Lock,
   Minimize2,
   Maximize2,
   Sparkles,
   FlipHorizontal,
   AlertCircle,
+  ShieldCheck,
 } from 'lucide-react';
 import { CallStatus, CallType } from '../types/connectx';
 import { formatCallDuration } from '../utils/connectxRules';
-import { createStoryVisualSvg } from '../utils/seedData';
+import {
+  acquireDeviceMedia,
+  initiateOutgoingCall,
+  answerIncomingCall,
+  rejectIncomingCall,
+  endCall,
+  ActiveWebRTCConnection,
+} from '../services/webRTCService';
 
 export interface ActiveCallSession {
   callId: string;
@@ -29,6 +36,8 @@ export interface ActiveCallSession {
   peerAvatar: string;
   callType: CallType;
   direction: 'outgoing' | 'incoming';
+  currentUserId?: string;
+  currentUserUsername?: string;
 }
 
 interface CallModalProps {
@@ -138,49 +147,119 @@ export const CallModal: React.FC<CallModalProps> = ({
   const [isMuted, setIsMuted] = useState(false);
   const [isCameraOn, setIsCameraOn] = useState(false);
   const [isSpeakerOn, setIsSpeakerOn] = useState(true);
-  const [isScreenSharing, setIsScreenSharing] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
-  const [hasHardwareCamera, setHasHardwareCamera] = useState(false);
   const [cameraFacing, setCameraFacing] = useState<'user' | 'environment'>('user');
   const [permissionError, setPermissionError] = useState<string | null>(null);
+  const [hasRemoteVideo, setHasRemoteVideo] = useState(false);
 
   const localVideoRef = useRef<HTMLVideoElement | null>(null);
-  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const remoteVideoRef = useRef<HTMLVideoElement | null>(null);
+  const remoteAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const remoteStreamRef = useRef<MediaStream | null>(null);
+  const activeConnRef = useRef<ActiveWebRTCConnection | null>(null);
   const stopRingRef = useRef<(() => void) | null>(null);
 
-  // Initialize session state and handle ringing tone
+  // Initialize session state and handle WebRTC setup
   useEffect(() => {
     if (!session) return;
+
     setCallType(session.callType);
     setIsCameraOn(session.callType === 'video');
     setCallStatus('ringing');
     setDurationSeconds(0);
     setIsMuted(false);
-    setIsScreenSharing(false);
     setIsMinimized(false);
     setPermissionError(null);
+    setHasRemoteVideo(false);
 
     // Start synthesized ringing tone
     stopRingRef.current = startRingtoneSynth();
 
-    // Auto-connect outgoing calls after 1.5s for seamless peer experience
-    let connectTimer: ReturnType<typeof setTimeout> | null = null;
+    let isCancelled = false;
+
+    // If Outgoing: Acquire media and initiate WebRTC offer immediately
     if (session.direction === 'outgoing') {
-      connectTimer = setTimeout(() => {
-        setCallStatus('connected');
-        if (stopRingRef.current) {
-          stopRingRef.current();
-          stopRingRef.current = null;
-        }
-        playConnectedChime();
-      }, 1500);
+      acquireDeviceMedia(session.callType, cameraFacing)
+        .then(async (stream) => {
+          if (isCancelled) {
+            stream.getTracks().forEach((t) => t.stop());
+            return;
+          }
+
+          localStreamRef.current = stream;
+          if (localVideoRef.current && session.callType === 'video') {
+            localVideoRef.current.srcObject = stream;
+          }
+
+          try {
+            const conn = await initiateOutgoingCall(
+              {
+                callId: session.callId,
+                chatId: session.chatId,
+                callerUid: session.currentUserId || 'unknown',
+                callerName: currentUserName,
+                callerUsername: session.currentUserUsername || 'user',
+                callerAvatar: currentUserAvatar,
+                calleeUid: session.peerUid,
+                calleeName: session.peerName,
+                calleeUsername: session.peerUsername,
+                calleeAvatar: session.peerAvatar,
+                callType: session.callType,
+              },
+              stream,
+              (remoteStream) => {
+                remoteStreamRef.current = remoteStream;
+                if (remoteAudioRef.current) {
+                  remoteAudioRef.current.srcObject = remoteStream;
+                }
+                if (remoteVideoRef.current) {
+                  remoteVideoRef.current.srcObject = remoteStream;
+                  const vTracks = remoteStream.getVideoTracks();
+                  setHasRemoteVideo(vTracks.length > 0);
+                }
+              },
+              (newStatus) => {
+                setCallStatus(newStatus);
+                if (newStatus === 'connected') {
+                  if (stopRingRef.current) {
+                    stopRingRef.current();
+                    stopRingRef.current = null;
+                  }
+                  playConnectedChime();
+                } else if (newStatus === 'ended' || newStatus === 'rejected' || newStatus === 'busy' || newStatus === 'missed') {
+                  handleHangup(newStatus);
+                }
+              },
+              (errMsg) => setPermissionError(errMsg)
+            );
+
+            activeConnRef.current = conn;
+          } catch (initErr: unknown) {
+            console.warn('Outgoing WebRTC call error:', initErr);
+            setPermissionError('Unable to connect call. Please verify device permissions and network.');
+          }
+        })
+        .catch((mediaErr) => {
+          console.warn('Hardware media acquisition error:', mediaErr);
+          setPermissionError('Microphone or camera permission denied. Please allow access in device settings.');
+        });
     }
 
     return () => {
-      if (connectTimer) clearTimeout(connectTimer);
+      isCancelled = true;
       if (stopRingRef.current) {
         stopRingRef.current();
         stopRingRef.current = null;
+      }
+      if (activeConnRef.current) {
+        activeConnRef.current.cleanup().catch(() => {});
+        activeConnRef.current = null;
+      }
+      if (localStreamRef.current) {
+        localStreamRef.current.getTracks().forEach((t) => t.stop());
+        localStreamRef.current = null;
       }
     };
   }, [session]);
@@ -194,121 +273,150 @@ export const CallModal: React.FC<CallModalProps> = ({
     return () => clearInterval(interval);
   }, [session, callStatus]);
 
-  // Hardware Media Stream Management (Voice mic + Video camera)
-  useEffect(() => {
+  // Handle Callee Answering Incoming Call
+  const handleAnswerCall = async () => {
     if (!session) return;
-    let isCancelled = false;
-
-    async function acquireMedia() {
-      // Clean up previous tracks before acquiring new stream
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-        mediaStreamRef.current = null;
-      }
-
-      if (typeof navigator === 'undefined' || !navigator.mediaDevices?.getUserMedia) {
-        return;
-      }
-
-      const constraints: MediaStreamConstraints = {
-        audio: true,
-        video: isCameraOn ? { facingMode: cameraFacing } : false,
-      };
-
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia(constraints);
-        if (isCancelled) {
-          stream.getTracks().forEach((t) => t.stop());
-          return;
-        }
-
-        mediaStreamRef.current = stream;
-        setPermissionError(null);
-
-        // Apply mute status to audio tracks
-        stream.getAudioTracks().forEach((t) => {
-          t.enabled = !isMuted;
-        });
-
-        // Attach video track if camera is enabled
-        const videoTracks = stream.getVideoTracks();
-        if (videoTracks.length > 0 && isCameraOn) {
-          setHasHardwareCamera(true);
-          if (localVideoRef.current) {
-            localVideoRef.current.srcObject = stream;
-          }
-        } else {
-          setHasHardwareCamera(false);
-        }
-      } catch (err: unknown) {
-        const errObj = err as { name?: string };
-        if (errObj.name === 'NotAllowedError' || errObj.name === 'PermissionDeniedError') {
-          setPermissionError(
-            'Microphone or camera permission was denied. Please allow access in your browser or device settings.'
-          );
-        } else if (errObj.name === 'NotFoundError') {
-          setPermissionError('No camera or microphone hardware found on this device.');
-        } else {
-          // Hardware stream optional in emulator environments
-          setHasHardwareCamera(false);
-        }
-      }
+    if (stopRingRef.current) {
+      stopRingRef.current();
+      stopRingRef.current = null;
     }
 
-    acquireMedia();
-
-    return () => {
-      isCancelled = true;
-      if (mediaStreamRef.current) {
-        mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-        mediaStreamRef.current = null;
+    try {
+      const stream = await acquireDeviceMedia(session.callType, cameraFacing);
+      localStreamRef.current = stream;
+      if (localVideoRef.current && session.callType === 'video') {
+        localVideoRef.current.srcObject = stream;
       }
-    };
-  }, [session, isCameraOn, cameraFacing]);
 
-  // Sync mute state to audio tracks
-  useEffect(() => {
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getAudioTracks().forEach((t) => {
-        t.enabled = !isMuted;
+      const conn = await answerIncomingCall(
+        session.callId,
+        stream,
+        (remoteStream) => {
+          remoteStreamRef.current = remoteStream;
+          if (remoteAudioRef.current) {
+            remoteAudioRef.current.srcObject = remoteStream;
+          }
+          if (remoteVideoRef.current) {
+            remoteVideoRef.current.srcObject = remoteStream;
+            const vTracks = remoteStream.getVideoTracks();
+            setHasRemoteVideo(vTracks.length > 0);
+          }
+        },
+        (newStatus) => {
+          setCallStatus(newStatus);
+          if (newStatus === 'ended') {
+            handleHangup('ended');
+          }
+        },
+        (errMsg) => setPermissionError(errMsg)
+      );
+
+      activeConnRef.current = conn;
+      playConnectedChime();
+      setCallStatus('connected');
+    } catch (err: unknown) {
+      console.warn('Failed to answer incoming call:', err);
+      setPermissionError('Could not access microphone/camera to answer call.');
+    }
+  };
+
+  // Handle Callee Rejecting Call
+  const handleRejectCall = async () => {
+    if (!session) return;
+    if (stopRingRef.current) {
+      stopRingRef.current();
+      stopRingRef.current = null;
+    }
+    await rejectIncomingCall(session.callId, 'rejected');
+    onEndCall(0, callType, 'rejected');
+  };
+
+  // Handle Hanging Up
+  const handleHangup = async (overrideStatus?: CallStatus) => {
+    if (stopRingRef.current) {
+      stopRingRef.current();
+      stopRingRef.current = null;
+    }
+
+    if (activeConnRef.current) {
+      await activeConnRef.current.cleanup().catch(() => {});
+      activeConnRef.current = null;
+    }
+
+    if (session) {
+      await endCall(session.callId).catch(() => {});
+    }
+
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((t) => t.stop());
+      localStreamRef.current = null;
+    }
+
+    const finalStatus: CallStatus =
+      overrideStatus || (callStatus === 'connected' ? 'ended' : session?.direction === 'incoming' ? 'missed' : 'ended');
+    onEndCall(durationSeconds, callType, finalStatus);
+  };
+
+  // Hardware Controls: Mute
+  const handleToggleMute = () => {
+    const nextMuted = !isMuted;
+    setIsMuted(nextMuted);
+    if (localStreamRef.current) {
+      localStreamRef.current.getAudioTracks().forEach((t) => {
+        t.enabled = !nextMuted;
       });
     }
-  }, [isMuted]);
+  };
 
-  if (!session) return null;
-
+  // Hardware Controls: Camera On / Off
   const handleToggleCamera = () => {
     const nextCamera = !isCameraOn;
     setIsCameraOn(nextCamera);
     setCallType(nextCamera ? 'video' : 'audio');
+    if (localStreamRef.current) {
+      localStreamRef.current.getVideoTracks().forEach((t) => {
+        t.enabled = nextCamera;
+      });
+    }
   };
 
-  const handleFlipCamera = () => {
-    setCameraFacing((prev) => (prev === 'user' ? 'environment' : 'user'));
+  // Hardware Controls: Flip Camera
+  const handleFlipCamera = async () => {
+    const nextFacing = cameraFacing === 'user' ? 'environment' : 'user';
+    setCameraFacing(nextFacing);
+
+    if (localStreamRef.current && isCameraOn) {
+      try {
+        const newStream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: nextFacing, width: { ideal: 1280 } },
+        });
+        const newVideoTrack = newStream.getVideoTracks()[0];
+        if (newVideoTrack && activeConnRef.current) {
+          const senders = activeConnRef.current.peerConnection.getSenders();
+          const videoSender = senders.find((s) => s.track?.kind === 'video');
+          if (videoSender) {
+            await videoSender.replaceTrack(newVideoTrack);
+          }
+          if (localVideoRef.current) {
+            localVideoRef.current.srcObject = newStream;
+          }
+        }
+      } catch (err) {
+        console.warn('Failed to flip camera:', err);
+      }
+    }
   };
 
-  const handleHangup = () => {
-    if (stopRingRef.current) {
-      stopRingRef.current();
-      stopRingRef.current = null;
+  // Hardware Controls: Speaker Volume
+  const handleToggleSpeaker = () => {
+    const nextSpeaker = !isSpeakerOn;
+    setIsSpeakerOn(nextSpeaker);
+    if (remoteAudioRef.current) {
+      remoteAudioRef.current.muted = !nextSpeaker;
     }
-    if (mediaStreamRef.current) {
-      mediaStreamRef.current.getTracks().forEach((t) => t.stop());
-      mediaStreamRef.current = null;
-    }
-    const finalStatus: CallStatus =
-      callStatus === 'connected' ? 'ended' : session.direction === 'incoming' ? 'missed' : 'ended';
-    onEndCall(durationSeconds, callType, finalStatus);
   };
 
-  const handleAnswerCall = () => {
-    if (stopRingRef.current) {
-      stopRingRef.current();
-      stopRingRef.current = null;
-    }
-    playConnectedChime();
-    setCallStatus('connected');
-  };
+  if (!session) return null;
 
   // Minimized floating call widget
   if (isMinimized) {
@@ -316,18 +424,18 @@ export const CallModal: React.FC<CallModalProps> = ({
       <div
         role="region"
         aria-label="Minimized active call"
-        className="fixed bottom-20 lg:bottom-6 right-4 z-50 w-80 rounded-2xl border-2 border-[#00a884] bg-white text-black p-3.5 shadow-2xl flex items-center justify-between gap-3 animate-fade-in"
+        className="fixed bottom-20 lg:bottom-6 right-4 z-50 w-80 rounded-2xl border-2 border-[#008C5A] bg-white text-black p-3.5 shadow-2xl flex items-center justify-between gap-3 animate-fade-in"
       >
         <div className="flex items-center gap-3 min-w-0">
           <img
             src={session.peerAvatar}
             alt={session.peerName}
-            className="w-10 h-10 rounded-full object-cover border border-[#00a884]"
+            className="w-10 h-10 rounded-full object-cover border-2 border-[#008C5A]"
           />
           <div className="min-w-0">
             <div className="text-sm font-bold text-black truncate">{session.peerName}</div>
             <div className="text-xs text-black font-mono font-semibold tabular-nums">
-              {callStatus === 'connected' ? formatCallDuration(durationSeconds) : 'Ringing...'}
+              {callStatus === 'connected' ? formatCallDuration(durationSeconds) : 'Connecting WebRTC...'}
             </div>
           </div>
         </div>
@@ -337,17 +445,17 @@ export const CallModal: React.FC<CallModalProps> = ({
             type="button"
             aria-label="Expand call window"
             onClick={() => setIsMinimized(false)}
-            className="p-2.5 rounded-xl bg-[#f0f2f5] hover:bg-[#d9fdd3] text-black cursor-pointer border border-[#d1d7db] transition-colors"
+            className="p-2.5 rounded-xl bg-slate-100 hover:bg-slate-200 text-black cursor-pointer border border-slate-300 transition-colors"
           >
             <Maximize2 className="w-4 h-4 text-black" />
           </button>
           <button
             type="button"
             aria-label="End call"
-            onClick={handleHangup}
-            className="p-2.5 rounded-xl bg-red-300 hover:bg-red-400 text-black cursor-pointer border border-red-500 transition-colors"
+            onClick={() => handleHangup()}
+            className="p-2.5 rounded-xl bg-rose-500 hover:bg-rose-600 text-white cursor-pointer transition-colors"
           >
-            <PhoneOff className="w-4 h-4 text-black" />
+            <PhoneOff className="w-4 h-4" />
           </button>
         </div>
       </div>
@@ -359,29 +467,39 @@ export const CallModal: React.FC<CallModalProps> = ({
       role="dialog"
       aria-modal="true"
       aria-labelledby="active-call-peer-name"
-      className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-fade-in"
+      className="fixed inset-0 z-50 bg-black/75 backdrop-blur-md flex items-center justify-center p-3 sm:p-4 animate-fade-in"
     >
-      <div className="relative max-w-2xl w-full rounded-3xl border border-[#d1d7db] bg-[#efeae2] text-black overflow-hidden shadow-2xl flex flex-col justify-between min-h-[520px] max-h-[92vh]">
-        {/* WhatsApp Chat Ambiance Wallpaper */}
-        <div className="absolute inset-0 wa-chat-wallpaper opacity-95 pointer-events-none" />
+      {/* Hidden real remote audio element */}
+      <audio ref={remoteAudioRef} autoPlay />
 
-        {/* Video Stream Stage when Video is enabled */}
-        {isCameraOn && (
-          <div className="absolute inset-0 pointer-events-none">
-            <img
-              src={createStoryVisualSvg('studio', session.peerName)}
-              alt="Remote video stream"
-              className="w-full h-full object-cover opacity-25"
+      <div className="relative max-w-2xl w-full rounded-3xl border border-slate-700 bg-[#0f172a] text-white overflow-hidden shadow-2xl flex flex-col justify-between min-h-[520px] max-h-[92vh]">
+        {/* Full-screen Remote Video Stage when Video Call is connected */}
+        {callType === 'video' && callStatus === 'connected' && (
+          <div className="absolute inset-0 bg-black flex items-center justify-center overflow-hidden">
+            <video
+              ref={remoteVideoRef}
+              autoPlay
+              playsInline
+              className={`w-full h-full object-cover ${hasRemoteVideo ? 'opacity-100' : 'opacity-0'}`}
             />
-            <div className="absolute inset-0 bg-white/70" />
+            {!hasRemoteVideo && (
+              <div className="text-center p-6 space-y-2">
+                <img
+                  src={session.peerAvatar}
+                  alt={session.peerName}
+                  className="w-24 h-24 rounded-full mx-auto border-4 border-[#008C5A]"
+                />
+                <p className="text-sm font-bold text-slate-300">Awaiting peer video feed...</p>
+              </div>
+            )}
           </div>
         )}
 
         {/* Top Call Header Bar */}
-        <div className="relative z-10 px-5 sm:px-6 py-3.5 flex items-center justify-between border-b border-[#d1d7db] bg-white/95 backdrop-blur-xs">
-          <div className="flex items-center gap-2 text-xs font-bold text-black">
-            <Lock className="w-3.5 h-3.5 text-[#00a884]" />
-            <span>ConnectX Protected {callType === 'video' ? 'HD Video' : 'Voice'} Call</span>
+        <div className="relative z-10 px-5 sm:px-6 py-3.5 flex items-center justify-between border-b border-white/10 bg-black/40 backdrop-blur-md">
+          <div className="flex items-center gap-2 text-xs font-bold text-white">
+            <ShieldCheck className="w-4 h-4 text-[#45D69A]" />
+            <span>ConnectX WebRTC {callType === 'video' ? 'HD Video' : 'Voice'} Call</span>
           </div>
 
           <div className="flex items-center gap-2">
@@ -389,18 +507,18 @@ export const CallModal: React.FC<CallModalProps> = ({
               type="button"
               aria-label="Minimize call window"
               onClick={() => setIsMinimized(true)}
-              className="p-2 rounded-xl bg-[#f0f2f5] hover:bg-[#d9fdd3] text-black transition-colors cursor-pointer border border-[#d1d7db]"
+              className="p-2 rounded-xl bg-white/10 hover:bg-white/20 text-white transition-colors cursor-pointer"
               title="Minimize to floating widget"
             >
-              <Minimize2 className="w-4 h-4 text-black" />
+              <Minimize2 className="w-4 h-4" />
             </button>
           </div>
         </div>
 
         {/* Permission Warning Banner if hardware access is blocked */}
         {permissionError && (
-          <div className="relative z-10 px-4 py-2.5 bg-amber-100 border-b border-amber-300 text-xs text-black font-semibold flex items-center gap-2">
-            <AlertCircle className="w-4 h-4 text-amber-700 shrink-0" />
+          <div className="relative z-10 px-4 py-2.5 bg-amber-500/20 border-b border-amber-500/30 text-xs text-amber-200 font-semibold flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
             <span className="flex-1">{permissionError}</span>
             <button
               type="button"
@@ -414,71 +532,67 @@ export const CallModal: React.FC<CallModalProps> = ({
 
         {/* Center Call Stage */}
         <div className="relative z-10 flex-1 flex flex-col items-center justify-center p-6 text-center space-y-4">
-          <div className="relative">
-            <div className="p-1.5 rounded-full border-4 border-[#00a884] bg-white shadow-lg">
-              <img
-                src={session.peerAvatar}
-                alt={session.peerName}
-                className="w-24 h-24 sm:w-28 sm:h-28 rounded-full object-cover"
-              />
+          {!(callType === 'video' && callStatus === 'connected' && hasRemoteVideo) && (
+            <div className="relative">
+              <div className="p-1.5 rounded-full border-4 border-[#008C5A] bg-slate-900 shadow-2xl">
+                <img
+                  src={session.peerAvatar}
+                  alt={session.peerName}
+                  className="w-24 h-24 sm:w-28 sm:h-28 rounded-full object-cover"
+                />
+              </div>
+              {callStatus === 'connected' && (
+                <span className="absolute bottom-1 right-1 w-5 h-5 rounded-full bg-[#45D69A] border-2 border-slate-900 shadow-xs animate-pulse" />
+              )}
             </div>
-            {callStatus === 'connected' && (
-              <span className="absolute bottom-1 right-1 w-5 h-5 rounded-full bg-[#25d366] border-2 border-white shadow-xs animate-pulse" />
-            )}
-          </div>
+          )}
 
           <div className="space-y-1">
             <h2
               id="active-call-peer-name"
-              className="text-2xl sm:text-3xl font-bold tracking-tight text-black"
+              className="text-2xl sm:text-3xl font-bold tracking-tight text-white drop-shadow-md"
             >
               {session.peerName}
             </h2>
-            <p className="text-xs font-mono font-semibold text-black">@{session.peerUsername}</p>
-            <div className="pt-1 flex items-center justify-center gap-2 text-sm font-bold text-black tabular-nums">
+            <p className="text-xs font-mono font-semibold text-slate-300">@{session.peerUsername}</p>
+            <div className="pt-1 flex items-center justify-center gap-2 text-sm font-bold text-white tabular-nums">
               {callStatus === 'ringing' ? (
-                <span className="text-[#00a884] animate-pulse">
+                <span className="text-[#45D69A] animate-pulse">
                   {session.direction === 'incoming'
                     ? 'Incoming ConnectX Call...'
-                    : 'Ringing...'}
+                    : 'Ringing peer...'}
                 </span>
               ) : (
-                <span className="text-black">{formatCallDuration(durationSeconds)}</span>
+                <span className="text-white drop-shadow-sm">{formatCallDuration(durationSeconds)}</span>
               )}
-              <span aria-hidden="true" className="text-black">
-                ·
-              </span>
-              <span className="text-xs font-semibold text-black">
-                {isMuted ? 'Mic Muted' : isScreenSharing ? 'Sharing Screen' : 'Crystal Clear Audio'}
+              <span aria-hidden="true">·</span>
+              <span className="text-xs font-semibold text-slate-300">
+                {isMuted ? 'Muted' : 'Direct WebRTC Stream'}
               </span>
             </div>
           </div>
 
-          {/* Equalizer / Audio Active Indicator */}
+          {/* Connected audio badge */}
           {callStatus === 'connected' && (
-            <div className="flex items-center justify-center gap-1.5 h-8 px-4 py-1.5 rounded-xl bg-white border border-[#d1d7db] shadow-xs">
-              <Sparkles className="w-3.5 h-3.5 text-[#00a884] mr-1" />
-              <span className="text-xs text-black font-semibold">
-                {isMuted
-                  ? 'Your microphone is muted'
-                  : `Active ${callType === 'video' ? 'Video' : 'Voice'} Session`}
+            <div className="flex items-center justify-center gap-1.5 h-8 px-4 py-1.5 rounded-xl bg-white/10 backdrop-blur-md border border-white/10 shadow-xs">
+              <Sparkles className="w-3.5 h-3.5 text-[#45D69A] mr-1" />
+              <span className="text-xs text-white font-semibold">
+                {isMuted ? 'Microphone muted' : 'WebRTC PeerConnection Active'}
               </span>
             </div>
           )}
 
           {/* Local Picture-in-Picture Self Preview */}
-          {(isCameraOn || isScreenSharing) && (
-            <div className="sm:absolute sm:bottom-6 sm:right-6 w-36 h-28 rounded-2xl overflow-hidden border-2 border-[#00a884] bg-white shadow-xl flex flex-col justify-between p-2.5 text-left relative">
-              {hasHardwareCamera && (
-                <video
-                  ref={localVideoRef}
-                  autoPlay
-                  playsInline
-                  muted
-                  className="absolute inset-0 w-full h-full object-cover"
-                />
-              )}
-              <div className="relative z-10 flex items-center gap-1.5 bg-black/40 px-2 py-0.5 rounded-md text-white backdrop-blur-xs">
+          {isCameraOn && (
+            <div className="sm:absolute sm:bottom-6 sm:right-6 w-36 h-28 rounded-2xl overflow-hidden border-2 border-[#008C5A] bg-black shadow-2xl flex flex-col justify-between p-2.5 text-left relative z-20">
+              <video
+                ref={localVideoRef}
+                autoPlay
+                playsInline
+                muted
+                className="absolute inset-0 w-full h-full object-cover"
+              />
+              <div className="relative z-10 flex items-center gap-1.5 bg-black/60 px-2 py-0.5 rounded-md text-white backdrop-blur-xs">
                 <img
                   src={currentUserAvatar}
                   alt={currentUserName}
@@ -488,118 +602,104 @@ export const CallModal: React.FC<CallModalProps> = ({
                   You ({cameraFacing === 'user' ? 'Front' : 'Rear'})
                 </span>
               </div>
-              <div className="relative z-10 text-[9px] text-white bg-black/40 px-1.5 py-0.5 rounded-md self-start font-mono font-semibold">
-                Live Preview
+              <div className="relative z-10 text-[9px] text-[#45D69A] bg-black/60 px-1.5 py-0.5 rounded-md self-start font-mono font-semibold">
+                Local Feed
               </div>
             </div>
           )}
         </div>
 
         {/* Bottom Call Controls Dock */}
-        <div className="relative z-10 px-4 sm:px-6 py-4 sm:py-5 bg-white border-t border-[#d1d7db] flex flex-wrap items-center justify-center gap-2.5 sm:gap-3">
+        <div className="relative z-10 px-4 sm:px-6 py-4 sm:py-5 bg-black/50 backdrop-blur-lg border-t border-white/10 flex flex-wrap items-center justify-center gap-3">
           {callStatus === 'ringing' && session.direction === 'incoming' ? (
-            <>
+            /* Incoming Call Prompt: Accept or Reject */
+            <div className="flex items-center gap-6">
+              <button
+                type="button"
+                onClick={handleRejectCall}
+                className="px-6 py-3.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm flex items-center gap-2 shadow-lg transition-all active:scale-95 cursor-pointer"
+              >
+                <PhoneOff className="w-5 h-5" />
+                <span>Decline</span>
+              </button>
               <button
                 type="button"
                 onClick={handleAnswerCall}
-                className="px-6 py-3 rounded-2xl bg-[#25d366] hover:bg-[#1da851] text-black text-sm font-bold flex items-center gap-2 cursor-pointer border border-[#1da851] shadow-xs min-h-[44px]"
+                className="px-6 py-3.5 rounded-2xl bg-[#008C5A] hover:bg-[#006B46] text-white font-bold text-sm flex items-center gap-2 shadow-lg transition-all active:scale-95 cursor-pointer animate-bounce"
               >
-                <Phone className="w-4 h-4 text-black" />
-                <span>Answer Call</span>
+                <Phone className="w-5 h-5" />
+                <span>Accept Call</span>
               </button>
-              <button
-                type="button"
-                onClick={handleHangup}
-                className="px-6 py-3 rounded-2xl bg-red-300 hover:bg-red-400 text-black text-sm font-bold flex items-center gap-2 cursor-pointer border border-red-500 shadow-xs min-h-[44px]"
-              >
-                <PhoneOff className="w-4 h-4 text-black" />
-                <span>Decline</span>
-              </button>
-            </>
+            </div>
           ) : (
+            /* Active Call Controls */
             <>
-              {/* Mute Button */}
+              {/* Mic Toggle */}
               <button
                 type="button"
                 aria-label={isMuted ? 'Unmute microphone' : 'Mute microphone'}
-                onClick={() => setIsMuted((m) => !m)}
-                className={`px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer border min-h-[44px] ${
+                onClick={handleToggleMute}
+                className={`p-3.5 rounded-2xl font-bold transition-all cursor-pointer ${
                   isMuted
-                    ? 'bg-amber-200 border-amber-500 text-black shadow-inner'
-                    : 'bg-[#f0f2f5] hover:bg-[#e2e6ea] border-[#d1d7db] text-black shadow-xs'
+                    ? 'bg-rose-500/20 border border-rose-500 text-rose-300'
+                    : 'bg-white/10 hover:bg-white/20 text-white'
                 }`}
+                title={isMuted ? 'Unmute microphone' : 'Mute microphone'}
               >
-                {isMuted ? <MicOff className="w-4 h-4 text-black" /> : <Mic className="w-4 h-4 text-black" />}
-                <span>{isMuted ? 'Unmute' : 'Mute'}</span>
+                {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
               </button>
 
-              {/* Camera Toggle Button */}
+              {/* Camera Toggle */}
               <button
                 type="button"
-                aria-label={isCameraOn ? 'Turn off camera' : 'Turn on camera'}
+                aria-label={isCameraOn ? 'Turn camera off' : 'Turn camera on'}
                 onClick={handleToggleCamera}
-                className={`px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer border min-h-[44px] ${
+                className={`p-3.5 rounded-2xl font-bold transition-all cursor-pointer ${
                   isCameraOn
-                    ? 'bg-[#d9fdd3] border-[#00a884] text-black shadow-inner'
-                    : 'bg-[#f0f2f5] hover:bg-[#e2e6ea] border-[#d1d7db] text-black shadow-xs'
+                    ? 'bg-[#008C5A] text-white'
+                    : 'bg-white/10 hover:bg-white/20 text-white'
                 }`}
+                title={isCameraOn ? 'Turn Camera Off' : 'Turn Camera On'}
               >
-                {isCameraOn ? <Video className="w-4 h-4 text-black" /> : <VideoOff className="w-4 h-4 text-black" />}
-                <span>{isCameraOn ? 'Video On' : 'Video Off'}</span>
+                {isCameraOn ? <Video className="w-5 h-5" /> : <VideoOff className="w-5 h-5" />}
               </button>
 
-              {/* Flip Camera Button (when camera is on) */}
+              {/* Flip Camera (if camera on) */}
               {isCameraOn && (
                 <button
                   type="button"
-                  aria-label="Switch between front and back camera"
+                  aria-label="Switch camera"
                   onClick={handleFlipCamera}
-                  className="px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl text-xs font-bold flex items-center gap-2 bg-[#f0f2f5] hover:bg-[#e2e6ea] border border-[#d1d7db] text-black transition-all cursor-pointer min-h-[44px]"
-                  title="Switch front/rear camera"
+                  className="p-3.5 rounded-2xl bg-white/10 hover:bg-white/20 text-white font-bold transition-all cursor-pointer"
+                  title="Switch Front/Rear Camera"
                 >
-                  <FlipHorizontal className="w-4 h-4 text-black" />
-                  <span>Flip</span>
+                  <FlipHorizontal className="w-5 h-5" />
                 </button>
               )}
 
-              {/* Speaker Toggle Button */}
+              {/* Speaker Output Toggle */}
               <button
                 type="button"
-                aria-label={isSpeakerOn ? 'Disable speakerphone' : 'Enable speakerphone'}
-                onClick={() => setIsSpeakerOn((s) => !s)}
-                className={`px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer border min-h-[44px] ${
+                aria-label={isSpeakerOn ? 'Mute speaker' : 'Enable speaker'}
+                onClick={handleToggleSpeaker}
+                className={`p-3.5 rounded-2xl font-bold transition-all cursor-pointer ${
                   isSpeakerOn
-                    ? 'bg-[#f0f2f5] hover:bg-[#e2e6ea] border-[#d1d7db] text-black shadow-xs'
-                    : 'bg-white border-[#d1d7db] text-black shadow-xs'
+                    ? 'bg-white/10 hover:bg-white/20 text-white'
+                    : 'bg-rose-500/20 border border-rose-500 text-rose-300'
                 }`}
+                title={isSpeakerOn ? 'Speaker On' : 'Speaker Muted'}
               >
-                {isSpeakerOn ? <Volume2 className="w-4 h-4 text-black" /> : <VolumeX className="w-4 h-4 text-black" />}
-                <span>{isSpeakerOn ? 'Speaker' : 'Earpiece'}</span>
-              </button>
-
-              {/* Screen Share Button */}
-              <button
-                type="button"
-                aria-label={isScreenSharing ? 'Stop screen share' : 'Share screen'}
-                onClick={() => setIsScreenSharing((s) => !s)}
-                className={`px-3.5 py-2.5 sm:px-4 sm:py-3 rounded-2xl text-xs font-bold flex items-center gap-2 transition-all cursor-pointer border min-h-[44px] ${
-                  isScreenSharing
-                    ? 'bg-[#d9fdd3] border-[#00a884] text-black shadow-inner'
-                    : 'bg-[#f0f2f5] hover:bg-[#e2e6ea] border-[#d1d7db] text-black shadow-xs'
-                }`}
-              >
-                <MonitorUp className="w-4 h-4 text-black" />
-                <span>{isScreenSharing ? 'Sharing' : 'Share Screen'}</span>
+                {isSpeakerOn ? <Volume2 className="w-5 h-5" /> : <VolumeX className="w-5 h-5" />}
               </button>
 
               {/* End Call Button */}
               <button
                 type="button"
-                aria-label="End call"
-                onClick={handleHangup}
-                className="px-5 py-3 rounded-2xl bg-red-300 hover:bg-red-400 text-black text-xs font-bold flex items-center gap-2 transition-all cursor-pointer border border-red-500 shadow-xs min-h-[44px] active:scale-95"
+                aria-label="Hang up call"
+                onClick={() => handleHangup()}
+                className="px-6 py-3.5 rounded-2xl bg-rose-600 hover:bg-rose-700 text-white font-bold text-sm flex items-center gap-2 shadow-lg transition-all active:scale-95 cursor-pointer ml-2"
               >
-                <PhoneOff className="w-4 h-4 text-black" />
+                <PhoneOff className="w-5 h-5" />
                 <span>End Call</span>
               </button>
             </>

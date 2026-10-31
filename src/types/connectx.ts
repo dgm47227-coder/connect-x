@@ -101,6 +101,7 @@ export interface ChatMessage {
   replyToText: string;
   status: MessageDeliveryStatus;
   isDeleted: boolean;
+  isEdited?: boolean;
   isEncrypted?: boolean;
   ciphertext?: string;
   iv?: string;
@@ -258,7 +259,38 @@ export interface DeviceTokenRecord {
 }
 
 export type CallType = 'audio' | 'video';
-export type CallStatus = 'ringing' | 'connected' | 'ended' | 'missed';
+export type CallStatus = 'ringing' | 'connected' | 'ended' | 'missed' | 'rejected' | 'busy';
+
+export interface RTCSdpPayload {
+  type: 'offer' | 'answer';
+  sdp: string;
+}
+
+export interface RTCIceCandidatePayload {
+  candidate: string;
+  sdpMid?: string | null;
+  sdpMLineIndex?: number | null;
+  usernameFragment?: string | null;
+}
+
+export interface CallSessionDoc {
+  callId: string;
+  chatId: string;
+  callerUid: string;
+  callerName: string;
+  callerUsername: string;
+  callerAvatar: string;
+  calleeUid: string;
+  calleeName: string;
+  calleeUsername: string;
+  calleeAvatar: string;
+  callType: CallType;
+  status: CallStatus;
+  offer?: RTCSdpPayload;
+  answer?: RTCSdpPayload;
+  createdAt: string;
+  updatedAt: string;
+}
 
 export interface CallLogEntry {
   callId: string;
