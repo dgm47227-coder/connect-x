@@ -5,7 +5,8 @@ const config: CapacitorConfig = {
   appName: 'ConnectX',
   webDir: 'dist',
   server: {
-    androidScheme: 'https'
+    androidScheme: 'https',
+    cleartext: true
   }
 };
 

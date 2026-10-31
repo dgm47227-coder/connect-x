@@ -60,18 +60,46 @@ export function usePWAInstall() {
 }
 
 export function useOnlineStatus() {
-  const [isOnline, setIsOnline] = useState(
-    typeof navigator !== 'undefined' ? navigator.onLine : true
-  );
+  const [isOnline, setIsOnline] = useState<boolean>(true);
 
   useEffect(() => {
-    const handleOnline = () => setIsOnline(true);
-    const handleOffline = () => setIsOnline(false);
+    let isMounted = true;
+
+    const probeConnectivity = async () => {
+      try {
+        await fetch('https://www.gstatic.com/generate_204', {
+          mode: 'no-cors',
+          cache: 'no-store',
+        });
+        if (isMounted) setIsOnline(true);
+      } catch {
+        if (isMounted && typeof navigator !== 'undefined') {
+          setIsOnline(navigator.onLine);
+        }
+      }
+    };
+
+    const handleOnline = () => {
+      if (isMounted) setIsOnline(true);
+    };
+
+    const handleOffline = () => {
+      // Don't immediately toggle to offline without probing first (prevents Android WebView false-negatives)
+      probeConnectivity();
+    };
 
     window.addEventListener('online', handleOnline);
     window.addEventListener('offline', handleOffline);
 
+    // Initial probe on startup
+    probeConnectivity();
+
+    // Periodic heartbeat probe every 30 seconds
+    const interval = setInterval(probeConnectivity, 30000);
+
     return () => {
+      isMounted = false;
+      clearInterval(interval);
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };

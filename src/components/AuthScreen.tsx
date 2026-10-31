@@ -232,8 +232,14 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({
         );
       } else if (msg.includes('auth/email-already-in-use')) {
         setErrorMessage('This email address is already registered. Switch to Sign In.');
+      } else if (msg.includes('auth/network-request-failed')) {
+        setErrorMessage('Network request failed: Could not reach Firebase servers. Please verify your internet connection or use "Sandbox Preview".');
       } else {
-        setErrorMessage('Authentication failed. Please check your connection or credentials.');
+        setErrorMessage(
+          msg && msg.length < 90
+            ? msg.replace(/^Firebase:\s*/, '')
+            : 'Authentication failed. Please check your connection or credentials.'
+        );
       }
     } finally {
       setLoading(false);
